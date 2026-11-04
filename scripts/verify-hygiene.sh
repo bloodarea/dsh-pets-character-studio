@@ -106,14 +106,26 @@ for f in "${files[@]}"; do
     # --- 规则 3：依赖与构建产物 ---
     node_modules/*|.venv/*|.pnpm-store/*|dist/*|build/*|out/*|coverage/*|.vite/*|.turbo/*|.cache/*|*.tsbuildinfo)
       block "$f" "依赖 / 构建产物不入库（由安装与构建流程重建）"; continue ;;
-    # --- 规则 3b：角色资源只放默认包（其余角色按需下载）---
+    # --- 规则 3b：人物包必须是完整可交付包（插件分发包不带人物包）---
+    # 仓库可以承载多个人物包，但每个包都必须带 manifest.json / LICENSE / ATTRIBUTION.md；
+    # 缺任何一项都视为未完成或授权待核实，只留本地、不随仓库分发。
     assets/characters/*)
-      case "$f" in
-        assets/characters/index.json|assets/characters/deepseek/*) : ;;
-        *)
-          block "$f" "只保留 deepseek 制作样例与角色索引；其他制作工程放 workspace/，完整人物包另行交付，不进入源码仓库"
-          continue ;;
-      esac ;;
+      rest=${f#assets/characters/}
+      if [ "$rest" != "index.json" ]; then
+        pack=${rest%%/*}
+        if [ "$pack" = "$rest" ]; then
+          block "$f" "assets/characters/ 根下只允许 index.json 与完整人物包目录"
+          continue
+        fi
+        missing=''
+        for need in manifest.json LICENSE ATTRIBUTION.md; do
+          [ -f "assets/characters/$pack/$need" ] || missing=$need
+        done
+        if [ -n "$missing" ]; then
+          block "$f" "人物包 $pack 缺少 $missing：未完成或授权待核实的包只留本地，不随仓库分发"
+          continue
+        fi
+      fi ;;
     # --- 规则 3c：项目技能仅本地 ---
     .agents/*)
       block "$f" "项目技能目录（.agents/）仅本地使用，不上传远端；需要对外分享请写脱敏版进 docs/"

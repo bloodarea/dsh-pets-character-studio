@@ -99,8 +99,11 @@ scratch/
 secrets.json
 local.config.json
 
-# --- 7. 人物制作样例：只保留 deepseek 与已有索引 -----------------------
-# 其他人物的生成包与制作工程放 workspace/，完整交付包另行发布，不进入源码仓库。
+# --- 7. 人物包：默认只留本地，按包显式放行（插件分发包不带人物包）-------
+# 仓库是人物包分发源，但入库包必须是完整、授权已核实的交付包：
+# manifest.json + LICENSE + ATTRIBUTION.md + 可用资源，并过卫生脚本复核。
+# 未完成或授权待核实的包（如 doubao）只留本地；新增发布包时在这里加一行
+# !/assets/characters/<id>/ 显式放行，不要图省事放行整个子目录。
 # 同样保留父目录、只忽略内容，否则 Negation（!）无法生效。
 /assets/characters/*
 !/assets/characters/deepseek/

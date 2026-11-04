@@ -14,8 +14,7 @@
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "files": [
     "index.js", "cordis.patch.yml", "locale/*.json", "icon.svg", "skills",
-    "tools", "scripts/*.py", "requirements.txt", "CHARACTER-PACK.md",
-    "assets/characters/deepseek", "assets/characters/index.json"
+    "templates", "tools", "scripts/*.py", "requirements.txt", "CHARACTER-PACK.md"
   ],
   "scripts": {
     "test": "node tools/character-editor/selftest-node.mjs && node tools/part-annotator/selftest-node.mjs",

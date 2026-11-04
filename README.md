@@ -41,7 +41,8 @@ Windows 使用 `.venv\Scripts\python.exe`。这些旧脚本提供基础骨架，
 | `scripts/*-to-*.py` | 图像去背、切分与基础骨架生成 |
 | `skills/three-view-parts/` | 可分发的三视图到完整部件贴图技能，交付止于贴图与清单 |
 | `assets/source/` | 制作输入与长期保留的源素材，不随 npm 包分发 |
-| `assets/characters/deepseek/` | 从拆分时默认包复制的独立制作样例，含完整署名和许可 |
+| `assets/characters/` | 已入库人物包（当前 `deepseek` 样例，含完整署名和许可）与 `index.json` 下载索引；插件分发包不含人物包 |
+| `templates/character-pack/` | DIY 人物包起点：manifest / 许可 / 署名模板与交付自检清单 |
 | `workspace/` | 本地拆件工程与模型环境，不入库 |
 | `output/` | 本地生成记录、临时脚本和验收证据，不入库 |
 | `references/` | 本地参考开源项目，不入库，也不作为工具启动依赖 |
@@ -61,6 +62,8 @@ Windows 使用 `.venv\Scripts\python.exe`。这些旧脚本提供基础骨架，
 3. 最终人物包：以 `manifest.json` 为入口，包含 Spine 资源、状态映射、预览/降级图、可选语音、许可与署名。这才是交给桌宠的产物。
 
 目前请人工整理第 3 类目录并核对协议；尚未实现一键完整包导出或运行时安装功能。
+
+插件与 npm 分发包只带制作工具和技能，**不含人物包**。仓库本身承担人物包分发：`assets/characters/index.json` 登记经 GitHub Releases 发布的完整包（`url` / `sha256` / `size` / `minPluginVersion` / `license`），dsh-pets 运行时从本仓下载；仓库内已入库的 `deepseek` 包是当前样例。装好插件后即可从零 DIY 自己的包：制作 → 按协议自检 → 放 `~/.dsh/pets/characters/<id>/` 或发布为 Release。起点见 [人物包模板](templates/character-pack/README.md)；完整教程待全流程跑通后再补。
 
 ## 在 DSH 中加载制作技能
 

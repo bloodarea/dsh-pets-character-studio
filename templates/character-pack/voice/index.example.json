@@ -1,0 +1,38 @@
+{
+  "character_id": "my-character",
+  "character_name": "TODO 角色名",
+  "language": "zh-CN",
+  "voice_profile": "TODO：声线与人设，用来控制批量合成的风格。",
+  "usage": "开发期离线批量生成固定音频，运行时按事件选择播放；非实时 TTS。",
+  "audio_format": "ogg",
+  "line_count": 2,
+  "notes": [
+    "audio_file 为包根相对路径；不需要语音时删掉 manifest 的 voice 字段和整个 voice/ 目录。",
+    "auto_play 只是建议值，冷却、并发与免打扰由运行端统一控制。",
+    "animation 是语义动作标签，不保证等于模型里的动画名。"
+  ],
+  "lines": [
+    {
+      "id": "connected_01",
+      "category": "agent",
+      "event": "connected",
+      "text": "TODO 台词",
+      "emotion": "cheerful",
+      "delivery": "轻快开场",
+      "audio_file": "voice/connected/connected_01.ogg",
+      "auto_play": false,
+      "animation": "greeting"
+    },
+    {
+      "id": "task_completed_01",
+      "category": "agent",
+      "event": "task_completed",
+      "text": "TODO 台词",
+      "emotion": "happy",
+      "delivery": "完成时得意",
+      "audio_file": "voice/task_completed/task_completed_01.ogg",
+      "auto_play": true,
+      "animation": "happy"
+    }
+  ]
+}

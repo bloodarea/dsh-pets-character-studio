@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "generatedAt": "2026-11-01T18:00:00+08:00",
-  "note": "可下载角色索引模板。内置的默认角色包不在此登记；新增角色时在 packs 追加条目，sha256 用 `sha256sum <zip>` 生成，url 指向 GitHub Releases 的单个 zip。",
+  "note": "可下载角色索引。已随仓库入库的样例包（如 deepseek）不在此登记；对外分发的包在 packs 追加条目，sha256 用 `sha256sum <zip>` 生成，url 指向 GitHub Releases 的单个 zip。",
   "packs": []
 }

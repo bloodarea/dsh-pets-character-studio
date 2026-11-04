@@ -6,7 +6,7 @@
 
 - 工具源码、脚本、依赖声明、根 README/协作说明、公开技能及其配套参考资源。
 - `assets/source/` 中需要保留的原始制作输入、人工维护素材与清单。迁入的历史素材和度量保持原样；可重建的差异图、报告、生成中间件以后放 `output/`，不继续扩充到源码树。
-- `assets/characters/deepseek/` 作为独立制作样例；另保留 `assets/characters/index.json`。其他人物包在本地 `workspace/` 制作，按完整人物包发布，不入本仓。不要把生成包当源码反复提交。
+- `assets/characters/` 承载已入库的人物包与 `index.json` 下载索引；插件分发包（npm `files`）不含人物包。每个入库包必须带 `manifest.json`、`LICENSE`、`ATTRIBUTION.md` 与可用资源，并经 `verify-hygiene.sh` 复核；未完成或授权待核实的包只留本地（默认忽略，按包显式放行）。当前样例为 `deepseek`；仓库作为分发源，对外下载由 GitHub Releases + `index.json` 登记。
 - `tools/character-editor/` 在本仓与 dsh-pets 均完整保留。共用修复要分别跑自测，不能假定自动同步。
 
 ## 仅本地内容

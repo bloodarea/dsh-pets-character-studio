@@ -88,6 +88,6 @@ DSH Pets 消费人物包，DSH Pets Character Studio 制作人物包。本文约
 2. 把 manifest、Spine 资源、静态图、可选语音及许可整理到一个自包含目录。打 ZIP 时 manifest 直接位于压缩包根。
 3. 人工核对整包；当前尚无完整人物包自动导出/安装器。编辑器子包导出后仍需整合其余资源。
 4. 运行项目选择某个完整版本作为内置快照或未来的下载包。Studio 和运行项目各自持有副本，改动不会自动覆盖另一边。
-5. 默认包保留于 `assets/characters/deepseek/`；其他包的目标用户位置为 `~/.dsh/pets/characters/<id>/`，同名时用户副本优先。这是待运行端实现的安装/覆盖策略。
+5. 已入库包位于 `assets/characters/<id>/`（当前样例 `deepseek`），下载索引在 `assets/characters/index.json`；dsh-pets 从本仓 GitHub Releases 下载，插件分发包不含人物包。运行端目标位置为 `~/.dsh/pets/characters/<id>/`，同名时用户副本优先。这是待运行端实现的安装/覆盖策略。起手模板见 [人物包模板](templates/character-pack/README.md)。
 
 本次拆分保留现有动画、音频及许可文件的内容。人物包应当独立于作者本机目录，也独立于本仓提供的编辑器源码。

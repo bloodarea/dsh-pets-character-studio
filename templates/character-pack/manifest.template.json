@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "my-character",
+  "version": "0.1.0",
+  "displayName": {
+    "en": "TODO display name",
+    "zh": "TODO 显示名"
+  },
+  "description": {
+    "en": "TODO: one-line description (unofficial fan work).",
+    "zh": "TODO：一句话简介（非官方二创）。"
+  },
+  "official": false,
+  "brand": "TODO",
+  "author": "TODO",
+  "license": "TODO",
+  "licenseUrl": "TODO",
+  "credits": ["TODO：上游作者 / 素材来源 / 工具署名"],
+  "homepage": "TODO（可选：本次发布页或介绍页）",
+  "minPluginVersion": "0.1.0",
+  "render": {
+    "type": "spine",
+    "entry": "spine/model.json",
+    "scale": 1.0,
+    "anchor": [0.5, 1.0]
+  },
+  "fallback": {
+    "type": "image",
+    "entry": "preview.webp"
+  },
+  "preview": "preview.webp",
+  "states": {
+    "idle": "idle",
+    "working": "working",
+    "attention": "attention",
+    "done": "done",
+    "failed": "failed"
+  },
+  "voice": {
+    "index": "voice/index.json"
+  }
+}
