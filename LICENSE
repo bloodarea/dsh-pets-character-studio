@@ -1,0 +1,101 @@
+# 许可证 / License
+
+本项目采用**分离授权（separate licensing）**模式：代码与角色资产适用不同许可，范围不同、条件不同。
+
+---
+
+## 1. 插件源代码：MIT License
+
+Copyright (c) 2026 bloodarea
+Portions derived from https://github.com/zuodazuoqiang001/dsh-pet (MIT License)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+**适用范围**：本仓库的源代码、脚本、配置与文档（`src/`、`client.js`、`scripts/`、`*.md`、`*.json` 等）。
+**不包含** `assets/characters/` 与 `assets/source/` 下的角色美术、Spine 骨骼动画数据与音频。制作源素材依其原始授权；未核实来源的输入不因迁仓获得 MIT 或默认角色许可，也不得自动发布。
+
+---
+
+## 2. 角色美术与衍生资产：CC BY-NC-SA 4.0
+
+`assets/characters/` 下的全部角色美术、Spine 骨骼与动画数据、语音等创意资产，采用
+**Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International**
+（署名—非商业性使用—相同方式共享 4.0 国际许可协议）。
+
+- 中文说明（含条款摘要）：https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh-hans
+- 许可全文：https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.zh-hans
+
+**具体适用范围以各角色包目录内的 `LICENSE` 与 `ATTRIBUTION` 文件为准**，两者冲突时以更严格者为准。
+
+### 2.1 署名链必须完整
+
+DeepSeek 角色包：原型设计 **上善无形 / 上善**，DeepSeek 拟人化二次设计 **ZipZipPipe**，
+本项目的衍生制作与整理 **bloodarea**。三环均须保留，不得省略任何一环。
+
+### 2.2 免费分发不等于可以商业使用
+
+GitHub Release、npm 等**免费发布**符合非商业用途的要求，但**不构成、也不转授任何商业使用权**。
+任何人不得据此将角色包或其演绎作品用于商业产品、付费服务或营利性分发。本项目不提供商业授权。
+
+### 2.3 不能替其他角色或第三方素材授予你没有的权利
+
+本项目仅对自身的衍生贡献授权。每个角色、贴图与音频资产的原始授权都需单独确认；
+未确认授权的素材一律不收录（见各包 `ATTRIBUTION` 中的"未收录"清单）。
+第三方资产保留其各自许可，本项目不作任何转授。
+
+### 2.4 合规使用要求
+
+使用、修改和再分发角色资产时，必须：
+
+1. 保留原作者与二次作者的署名；
+2. 标明你所做的修改内容；
+3. 遵守非商业使用限制；
+4. 以**相同许可**（CC BY-NC-SA 4.0）发布你的衍生贡献。
+
+---
+
+## 3. 通用条款
+
+- **商业使用**：MIT 允许商业使用**代码**；若要商用，必须自行移除 `assets/characters/` 下的全部 CC 授权资产。
+- **非官方声明**：本项目是非官方社区同人作品，与 DeepSeek 及其他相关模型提供商不存在官方关联；
+  DeepSeek、Claude、GPT、Kimi、Qwen 等名称与商标归各自权利人所有。
+- **第三方依赖**：Spine 运行时与导出的动画数据受 Esoteric Software 商业许可约束；
+  其他第三方依赖保留其各自许可，本项目不代为授权。
+- **权利人与下架**：如权利人认为本仓库内容欠妥，请在
+  https://github.com/bloodarea/dsh-pets/issues 提交并指明文件与可核实出处，核实后立即停止分发。
+  CC 许可一经授予不可撤销，因此本项是"停止分发"的承诺，而非修改许可条款。
+
+---
+
+## 4. English summary
+
+This project uses **split licensing**:
+
+- **Source code**: MIT License (see §1).
+- **Character art, Spine animation data and audio under `assets/characters/`**: CC BY-NC-SA 4.0
+  (Attribution-NonCommercial-ShareAlike 4.0 International), scoped per pack by that pack's
+  `LICENSE` and `ATTRIBUTION` files.
+
+The DeepSeek pack derives from the whale-girl character designed by 上善无形 / 上善 and the DeepSeek
+personification redesign by ZipZipPipe. Reuse requires full attribution, an indication of changes,
+**non-commercial** use only, and ShareAlike licensing of derivative contributions.
+
+Free distribution on GitHub Releases or npm does **not** grant commercial rights. This project
+grants no rights it does not hold; every asset's upstream license must be verified per asset.
+This is an unofficial fan project with no affiliation to DeepSeek or any model provider.

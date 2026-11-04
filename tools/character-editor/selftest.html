@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>内置人物包管理器 · spine-core 自检</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #151821; --panel: #1e2330; --line: #2c3444; --fg: #e6ebf5; --dim: #8b98ad;
+    --ok: #4ec9a5; --danger: #f57785; --accent: #5aa9ff;
+    --font-ui: system-ui, -apple-system, "Segoe UI", "Noto Sans CJK SC", sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; background: var(--bg); color: var(--fg); font: 13px/1.5 var(--font-ui); }
+  h1 { margin: 0 0 8px; font-size: 16px; }
+  #summary { margin: 0 0 16px; padding: 10px 12px; border-radius: 6px; font: 600 14px/1.4 var(--font-mono); border: 1px solid var(--line); background: var(--panel); }
+  #summary.pass { color: var(--ok); border-color: #2f6b5b; }
+  #summary.fail { color: var(--danger); border-color: #6b2f39; }
+  #results { max-width: 1100px; }
+  #results p { color: var(--dim); }
+  #results p.pass { color: var(--ok); }
+  ul.failures { margin: 0; padding-left: 18px; }
+  ul.failures li { margin: 4px 0; color: var(--danger); font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; }
+  .hint { color: var(--dim); margin: 0 0 16px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<h1>内置人物包管理器 · spine-core 自检</h1>
+<p class="hint">纯函数断言：解析 / 蒙皮 / IK / 几何 / 权重 / 命中，以及 bundle.js 的索引校验 / 路径 / 补丁 / ZIP。期望值由官方 spine-core 4.2.120 计算。返回 <a href="index.html">内置人物包管理器</a></p>
+<p id="summary">RUNNING…</p>
+<div id="results"></div>
+<script src="spine-core.js"></script>
+<script src="bundle.js"></script>
+<script src="voice.js"></script>
+<script src="fixtures/cases.js"></script>
+<script src="selftest.js"></script>
+</body>
+</html>

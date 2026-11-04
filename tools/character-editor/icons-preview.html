@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>图标集预览 · 内置人物包管理器</title>
+<style>
+  :root{--bg:#151821;--panel:#1e2330;--line:#2c3444;--fg:#e6ebf5;--dim:#8b98ad;--accent:#5aa9ff}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:13px/1.6 system-ui,-apple-system,"Segoe UI","Noto Sans CJK SC",sans-serif;padding:20px}
+  h1{font-size:15px;font-weight:600;margin:0 0 4px}
+  p.note{color:var(--dim);margin:0 0 18px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+        padding:12px 10px;display:flex;flex-direction:column;align-items:center;gap:6px}
+  .card svg{width:28px;height:28px;stroke:var(--accent);fill:none;stroke-width:1.6;
+            stroke-linecap:round;stroke-linejoin:round}
+  .card .nm{color:var(--dim);font-size:11.5px;font-variant-numeric:tabular-nums}
+  .sizes{display:flex;gap:14px;align-items:flex-end;margin-top:6px}
+  .sizes svg{stroke:var(--accent);fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+</style>
+</head>
+<body>
+<h1>内置人物包管理器 · 图标集</h1>
+<p class="note">16×16 网格 · 1.6 线宽 · 圆角端点 · 颜色随 currentColor。演示页同时用 13/14/16/28px 展示可缩放的清晰度。</p>
+<div class="sizes" id="sizes"></div>
+<div class="grid" id="grid" style="margin-top:18px"></div>
+<script src="icons.js"></script>
+<script>
+  const grid = document.getElementById("grid");
+  for (const name of SPINE_ICON_NAMES) {
+    const d = document.createElement("div");
+    d.className = "card";
+    d.innerHTML = spineIcon(name) + `<span class="nm">${name}</span>`;
+    grid.appendChild(d);
+  }
+  const sz = document.getElementById("sizes");
+  [13, 14, 16, 28].forEach(px => {
+    const w = document.createElement("div");
+    w.className = "card";
+    w.innerHTML = spineIcon("bone") + `<span class="nm">${px}px</span>`;
+    w.querySelector("svg").style.width = px + "px";
+    w.querySelector("svg").style.height = px + "px";
+    sz.appendChild(w);
+  });
+</script>
+</body>
+</html>

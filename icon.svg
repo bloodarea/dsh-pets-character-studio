@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="DSH Pets">
+  <rect width="128" height="128" rx="30" fill="#4D6BFE"/>
+  <path d="M30 46 43 20 53 45Z" fill="#F4F6FF"/>
+  <path d="M98 46 85 20 75 45Z" fill="#F4F6FF"/>
+  <ellipse cx="64" cy="73" rx="34" ry="30" fill="#F4F6FF"/>
+  <circle cx="51" cy="67" r="4.5" fill="#3A4CC0"/>
+  <circle cx="77" cy="67" r="4.5" fill="#3A4CC0"/>
+  <path d="M58 82h12l-6 8z" fill="#3A4CC0"/>
+  <path d="M56 92q8 6 16 0" fill="none" stroke="#3A4CC0" stroke-width="3" stroke-linecap="round"/>
+</svg>

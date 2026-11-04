@@ -1,0 +1,101 @@
+# ===========================================================================
+# dsh-pets-character-studio 文件卫生规则（machine-enforced）
+# 规则正文与理由：CONTRIBUTING.md § 文件卫生规则
+# 提交前自检：scripts/verify-hygiene.sh （pre-commit 钩子已挂）
+# 修改本文件时请同步 scripts/verify-hygiene.sh 的硬性校验规则。
+# ===========================================================================
+
+# --- 1. 本地参考资料：第三方参考项目 / 技术实验与验证脚本 ------------------
+# 只在本机保留，永不入库：体积大、多为第三方代码、含实验痕迹与可能的许可证冲突。
+# 前导 / 只锚定仓库根：`skills/<name>/references/` 是随包分发的技能资源，不属于此列。
+/references/
+/reference/
+/experiments/
+/playground/
+/sandbox/
+
+# --- 1b. 本地工作区：部件拆分与运行环境（模型文件） ----------------------
+# 只在本机保留：拆件中间产物、模型权重与运行时依赖体积大、可重建，且多为第三方许可。
+# 需要长期保留的产出应落 assets/source/（图片 + manifest），工作现场本身不入库。
+/workspace/
+
+# --- 2. 内部文档：docs/ 下的文档资源不入库 --------------------------------
+# 唯一例外：README 需要引用的图片 / 截图，统一放 docs/assets/，且必须是图片格式。
+# 注意：保留目录本身，只忽略其内容，否则 Negation（!）无法生效。
+/docs/*
+!/docs/assets/
+/docs/assets/*
+!/docs/assets/*.png
+!/docs/assets/*.jpg
+!/docs/assets/*.jpeg
+!/docs/assets/*.gif
+!/docs/assets/*.webp
+!/docs/assets/*.svg
+!/docs/assets/*.avif
+
+# --- 3. 依赖与构建产物 ----------------------------------------------------
+node_modules/
+.venv/
+.pnpm-store/
+dist/
+build/
+out/
+coverage/
+.vite/
+.turbo/
+.cache/
+*.tsbuildinfo
+
+# --- 3b. Python 字节码 ------------------------------------------------
+__pycache__/
+*.py[cod]
+
+# --- 4. 本地运行态、编辑器与系统垃圾 --------------------------------------
+.dsh/
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- 4b. 测试产物（浏览器截图 / 验收证据）--------------------------------
+output/
+
+# --- 5. 日志与临时文件 ----------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+tmp/
+.tmp/
+scratch/
+*.bak
+*.orig
+*.rej
+
+# --- 6. 凭据与本地配置（绝不入库） ----------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+local.config.json
+
+# --- 7. 人物制作样例：只保留 deepseek 与已有索引 -----------------------
+# 其他人物的生成包与制作工程放 workspace/，完整交付包另行发布，不进入源码仓库。
+# 同样保留父目录、只忽略内容，否则 Negation（!）无法生效。
+/assets/characters/*
+!/assets/characters/deepseek/
+!/assets/characters/index.json
+
+# --- 8. 项目技能：仅本地使用，不上传远端 ----------------------------------
+# DSH 在 <projectRoot>/.agents/skills 发现项目级技能（每技能一个目录含 SKILL.md）。
+# 里面常含本机路径与内部工作流，属于工作资产，故整体忽略。
+.agents/

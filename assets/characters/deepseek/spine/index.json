@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "base": "assets/characters/deepseek/spine",
+  "label": "deepseek 女仆",
+  "files": {
+    "model": "model.json",
+    "atlas": "model.atlas",
+    "textures": [
+      "model.png"
+    ]
+  }
+}

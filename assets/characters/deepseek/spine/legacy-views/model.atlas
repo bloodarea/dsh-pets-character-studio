@@ -1,0 +1,9 @@
+model.png
+size:2048,2048
+filter:MipMapLinearLinear,Linear
+back
+bounds:4,4,477,720
+front
+bounds:489,4,545,720
+side
+bounds:1042,4,487,720

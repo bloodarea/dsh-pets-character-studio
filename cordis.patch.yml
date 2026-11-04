@@ -1,0 +1,4 @@
+# Character Studio 只注册制作技能；桌宠运行插件由 dsh-pets 单独提供。
+- insert:
+    - id: dsh-pets-character-studio
+      name: dsh-pets-character-studio

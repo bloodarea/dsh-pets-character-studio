@@ -1,0 +1,4 @@
+# Optional image-to-rig scripts only; both web tools use Python's standard library.
+numpy>=1.24,<3
+Pillow>=10,<13
+scipy>=1.10,<2

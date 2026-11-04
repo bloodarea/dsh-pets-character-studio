@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>内置人物包管理器</title>
+<link rel="stylesheet" href="ui.css">
+</head>
+<body>
+
+<!-- =====================================================================
+     自上而下：菜单条 → 视图/显示层条 → 画布+右栏 → 动画条 → 状态栏
+     ===================================================================== -->
+<header class="topbar">
+  <!-- 菜单条：文件 / 编辑 / 视图 / 帮助 + 右侧标题 -->
+  <div class="menubar" role="menubar" aria-label="菜单条">
+    <div class="menu-wrap">
+      <button id="btnMenuFile" class="menubtn" type="button" role="menuitem" aria-haspopup="true"
+              aria-expanded="false" aria-controls="menuFile">文件</button>
+      <div id="menuFile" class="menu" role="menu" aria-label="文件" hidden></div>
+    </div>
+    <div class="menu-wrap">
+      <button id="btnMenuEdit" class="menubtn" type="button" role="menuitem" aria-haspopup="true"
+              aria-expanded="false" aria-controls="menuEdit">编辑</button>
+      <div id="menuEdit" class="menu" role="menu" aria-label="编辑" hidden></div>
+    </div>
+    <div class="menu-wrap">
+      <button id="btnMenuView" class="menubtn" type="button" role="menuitem" aria-haspopup="true"
+              aria-expanded="false" aria-controls="menuView">视图</button>
+      <div id="menuView" class="menu" role="menu" aria-label="视图" hidden></div>
+    </div>
+    <div class="menu-wrap">
+      <button id="btnMenuHelp" class="menubtn" type="button" role="menuitem" aria-haspopup="true"
+              aria-expanded="false" aria-controls="menuHelp">帮助</button>
+      <div id="menuHelp" class="menu" role="menu" aria-label="帮助" hidden></div>
+    </div>
+    <span class="spacer" aria-hidden="true"></span>
+    <span class="app-title">内置人物包管理器</span>
+  </div>
+
+  <!-- 视图 / 显示层条（一行；<960px 允许换行但不横向溢出） -->
+  <div class="bar bar-view" role="toolbar" aria-label="视图与显示层">
+    <button id="btnFit" class="btn" type="button" disabled title="适配全部（F）；Shift+F 适配选中">
+      <svg class="ic" aria-hidden="true"><use href="#i-fit"></use></svg><span>适配</span><kbd>F</kbd>
+    </button>
+    <div class="zoomgrp" role="group" aria-label="缩放">
+      <button id="btnZoomOut" class="btn btn-icon" type="button" disabled title="缩小（-）">
+        <svg class="ic" aria-hidden="true"><use href="#i-zoom-out"></use></svg>
+      </button>
+      <span id="zoomLabel" class="zoom-val mono dim" title="当前缩放">—</span>
+      <button id="btnZoomIn" class="btn btn-icon" type="button" disabled title="放大（+）">
+        <svg class="ic" aria-hidden="true"><use href="#i-zoom-in"></use></svg>
+      </button>
+    </div>
+    <span class="vsep" aria-hidden="true"></span>
+    <div class="layers" role="group" aria-label="显示层（可多选）">
+      <label class="layer" title="显示角色贴图；贴图只影响显示，不勾也能选中/拖动部件">
+        <input type="checkbox" data-layer="texture" checked><svg class="ic" aria-hidden="true"><use href="#i-texture"></use></svg><span>贴图</span>
+      </label>
+      <label class="layer" title="显示骨骼与关节（含 IK 约束着色）">
+        <input type="checkbox" data-layer="bones"><svg class="ic" aria-hidden="true"><use href="#i-bone"></use></svg><span>骨骼</span>
+      </label>
+      <label class="layer" title="显示网格三角面与图集 UV">
+        <input type="checkbox" data-layer="mesh"><svg class="ic" aria-hidden="true"><use href="#i-mesh"></use></svg><span>网格</span>
+      </label>
+      <label class="layer" title="按绑定骨着色显示权重归属">
+        <input type="checkbox" data-layer="weights"><svg class="ic" aria-hidden="true"><use href="#i-weight"></use></svg><span>权重</span>
+      </label>
+    </div>
+    <label class="toggle" title="吸附：拖动时取整到 1 个单位（默认关闭）">
+      <input id="snapChk" type="checkbox"><svg class="ic" aria-hidden="true"><use href="#i-magnet"></use></svg>
+      <span>吸附</span><span id="snapState" class="state">关闭</span>
+    </label>
+    <label class="pick" id="weightModeWrap" hidden title="权重层配色：按骨配色 / 只看选中骨的热力">
+      <span class="lbl">权重配色</span>
+      <select id="weightMode" aria-label="权重层配色">
+        <option value="bone">按骨配色</option>
+        <option value="heat">选中骨热力</option>
+      </select>
+    </label>
+    <label class="alpha" title="贴图不透明度：叠加调试层时默认降到 35%">
+      <span class="lbl">贴图强度</span>
+      <input id="texAlpha" type="range" min="0" max="100" step="1" value="100" aria-label="贴图强度">
+      <span id="texAlphaV" class="val mono">100%</span>
+    </label>
+    <!-- 载入只接受一个 index.json（契约 §2.2）；模型/图集/贴图由索引读取 -->
+    <input id="files" type="file" accept=".json" hidden>
+    <!-- 语音包：期望文件名 index.json；手动选择不继承包根（契约 §2.1 / Lead 裁决 2） -->
+    <input id="voiceFiles" type="file" accept=".json,application/json" hidden>
+    <!-- 面板开关：视图条最右端，只负责「展开」；面板内顶部有「收起」（窄屏抽屉同理） -->
+    <button id="btnPanel" class="btn panel-open-btn" type="button" aria-pressed="false" aria-controls="inspector" title="展开右侧面板（窄屏为抽屉）">
+      <svg class="ic" aria-hidden="true"><use href="#i-panel"></use></svg><span>展开</span>
+    </button>
+  </div>
+</header>
+
+<main>
+  <div id="stage" class="stage">
+    <canvas id="cv" aria-label="角色画布：拖动部件移动，滚轮缩放，按住 Space 或中键拖动平移"></canvas>
+
+    <!-- 空状态：未载入 -->
+    <div id="emptyState" class="stage-overlay">
+      <div class="card">
+        <h1>内置人物包管理器</h1>
+        <p>载入索引文件（index.json）；模型、图集与全部贴图由索引在同一目录读取，先看姿势，再微调摆位。</p>
+        <div class="actions">
+          <button id="btnEmptyLoad" class="btn primary" type="button">
+            <svg class="ic" aria-hidden="true"><use href="#i-open"></use></svg><span>载入文件</span>
+          </button>
+          <button id="btnEmptyExample" class="btn" type="button">
+            <svg class="ic" aria-hidden="true"><use href="#i-sample"></use></svg><span>查看示例</span>
+          </button>
+        </div>
+        <p class="foot">也可以把 index.json 拖进画布 · 载入后拖动部件即可摆位</p>
+      </div>
+    </div>
+
+    <!-- 空状态：全部部件隐藏 -->
+    <div id="hiddenAllState" class="stage-overlay" hidden>
+      <div class="card">
+        <h1>所有部件已隐藏</h1>
+        <p>画布上没有可显示的部件，列表与检查器仍可操作。</p>
+        <div class="actions">
+          <button id="btnRestoreAll" class="btn primary" type="button">
+            <svg class="ic" aria-hidden="true"><use href="#i-eye"></use></svg><span>全部显示</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 空状态：全部显示层关闭 -->
+    <div id="noLayerState" class="stage-overlay" hidden>
+      <div class="card">
+        <h1>未显示任何内容</h1>
+        <p>四个显示层都关掉了。画布暂不响应拾取，但列表与检查器仍然有效。</p>
+        <div class="actions">
+          <button id="btnRestoreTexture" class="btn primary" type="button">
+            <svg class="ic" aria-hidden="true"><use href="#i-texture"></use></svg><span>恢复贴图</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="notices" class="notices" aria-live="polite"></div>
+    <div id="dragBadge" class="drag-badge" hidden></div>
+  </div>
+
+  <aside id="inspector" class="inspector" aria-label="部件与检查器">
+    <div class="inspector-bar">
+      <div class="inspector-tabs" role="tablist" aria-label="侧栏分页">
+        <button id="tabParts" class="inspector-tab" type="button" role="tab" aria-selected="true" aria-controls="partsView">部件</button>
+        <button id="tabEvents" class="inspector-tab" type="button" role="tab" aria-selected="false" aria-controls="eventPanel">
+          <span>事件</span><span id="eventTabBadge" class="tab-badge" hidden>0</span>
+        </button>
+      </div>
+      <span class="spacer"></span>
+      <button id="btnPanelClose" class="btn btn-sm" type="button" title="收起右侧面板（窄屏关闭抽屉）">
+        <svg class="ic" aria-hidden="true"><use href="#i-panel"></use></svg><span>收起</span>
+      </button>
+    </div>
+    <div id="partsView" class="parts-view" role="tabpanel" aria-labelledby="tabParts">
+    <section class="panel panel-list">
+      <header class="panel-hd">
+        <h2>部件 <span id="slotCount" class="count">0</span></h2>
+        <div class="search-wrap">
+          <svg class="ic" aria-hidden="true"><use href="#i-search"></use></svg>
+          <input id="slotSearch" type="search" placeholder="搜索部件 / 骨骼" autocomplete="off" aria-label="搜索部件">
+          <span id="searchCount" class="search-count" hidden></span>
+        </div>
+      </header>
+      <div class="list-view-tabs" role="tablist" aria-label="部件列表视图">
+        <button id="tabListOrder" class="inspector-tab list-view-tab" type="button" role="tab" aria-selected="true" data-view="order">
+          <svg class="ic" aria-hidden="true"><use href="#i-layers"></use></svg><span>显示顺序</span>
+        </button>
+        <button id="tabListTree" class="inspector-tab list-view-tab" type="button" role="tab" aria-selected="false" data-view="tree">
+          <svg class="ic" aria-hidden="true"><use href="#i-bone"></use></svg><span>骨骼层级</span>
+        </button>
+      </div>
+      <p id="listEmpty" class="empty-note">载入后在这里选件；列表按绘制层级排列，上方在最前。</p>
+      <div id="list" class="slot-list" role="listbox" aria-label="部件列表，上方在前"></div>
+    </section>
+
+    <section class="panel panel-inspector" aria-label="选中部件检查器">
+      <header class="panel-hd">
+        <h2>选中</h2><span class="spacer"></span>
+        <span id="selBadge" class="count">—</span>
+      </header>
+      <p id="selEmpty" class="empty-note">点击画布或列表选择部件。选中后这里显示绑定骨、局部坐标与层级操作。</p>
+      <div id="selBody" hidden>
+        <div class="sel-head">
+          <div class="sel-title">
+            <span id="selName" class="name">—</span>
+            <span id="selSlot" class="slot">slot:—</span>
+          </div>
+          <div class="sel-actions">
+            <button id="btnSelVisible" class="btn btn-icon btn-sm" type="button" aria-pressed="false" title="显示/隐藏该部件（H）">
+              <svg class="ic" aria-hidden="true"><use href="#i-eye"></use></svg>
+            </button>
+            <button id="btnSelLock" class="btn btn-icon btn-sm" type="button" aria-pressed="false" title="锁定：只影响查看器，不写入 JSON">
+              <svg class="ic" aria-hidden="true"><use href="#i-lock"></use></svg>
+            </button>
+          </div>
+        </div>
+        <dl class="kv">
+          <dt>绑定骨</dt><dd id="selBone">—</dd>
+          <dt>类型</dt><dd id="selType">—</dd>
+          <dt>可编辑</dt><dd id="selEditable">—</dd>
+        </dl>
+        <div class="field-grid">
+          <label for="posX">X<input id="posX" type="number" step="1" disabled></label>
+          <label for="posY">Y<input id="posY" type="number" step="1" disabled></label>
+        </div>
+        <p class="coord-note">父骨局部坐标，Y 向上 · 方向键 1（Shift ×10）</p>
+        <div class="xform-row">
+          <label for="rotX">旋转°<input id="rotX" type="number" step="1" disabled></label>
+          <input id="rotRange" type="range" min="-180" max="180" step="1" value="0" disabled aria-label="旋转滑杆">
+        </div>
+        <div class="field-grid field-grid-2">
+          <label for="scaleX">缩放 X<input id="scaleX" type="number" step="0.05" min="0.01" disabled></label>
+          <label for="scaleY">缩放 Y<input id="scaleY" type="number" step="0.05" min="0.01" disabled></label>
+        </div>
+        <p class="coord-note">旋转/缩放同样写父骨局部值，撤销覆盖；拖动只改 X/Y。</p>
+        <div class="row-actions">
+          <button id="btnLayerUp" class="btn btn-sm" type="button" disabled title="上移一层（更靠前，]）">
+            <svg class="ic" aria-hidden="true"><use href="#i-layer-up"></use></svg><span>上移</span>
+          </button>
+          <button id="btnLayerDown" class="btn btn-sm" type="button" disabled title="下移一层（更靠后，[）">
+            <svg class="ic" aria-hidden="true"><use href="#i-layer-down"></use></svg><span>下移</span>
+          </button>
+          <button id="btnLayerTop" class="btn btn-sm" type="button" disabled title="置顶（最前）">
+            <svg class="ic" aria-hidden="true"><use href="#i-layer-front"></use></svg><span>置顶</span>
+          </button>
+          <button id="btnLayerBottom" class="btn btn-sm" type="button" disabled title="置底（最后）">
+            <svg class="ic" aria-hidden="true"><use href="#i-layer-back"></use></svg><span>置底</span>
+          </button>
+          <button id="btnRestoreSlot" class="btn btn-sm" type="button" disabled title="把这个部件恢复到刚载入时的位置">
+            <svg class="ic" aria-hidden="true"><use href="#i-reset"></use></svg><span>恢复该部件</span>
+          </button>
+        </div>
+        <p id="selReason" class="reason" hidden></p>
+        <div id="influences" class="influences" hidden>
+          <div>由多根骨骼共同控制：</div>
+          <ul id="influenceList"></ul>
+        </div>
+      </div>
+    </section>
+
+    <div id="debug" class="panel debug">
+      <button id="debugToggle" class="debug-summary" type="button" aria-expanded="false" aria-controls="debugBody">
+        <svg class="ic caret" aria-hidden="true"><use href="#i-chevron-right"></use></svg>
+        <span>调试</span><span class="dim">骨骼 / 网格 / 权重 / 表情</span>
+        <span class="spacer"></span>
+        <span id="diagBadge" class="badge-num" hidden>0</span>
+      </button>
+      <div id="debugBody" class="debug-body" hidden>
+        <section>
+          <h3>骨骼 / IK</h3>
+          <div id="boneLegend" class="legend"></div>
+          <p id="boneNote">载入后显示骨骼数与约束状态。</p>
+        </section>
+        <section>
+          <h3>网格</h3>
+          <p id="meshNote">载入后显示网格与 UV 状态。</p>
+        </section>
+        <section>
+          <h3>权重</h3>
+          <div id="legend" class="legend"></div>
+          <p id="weightsNote">载入后显示权重归属说明。</p>
+        </section>
+        <section>
+          <h3>表情参数（仅调试，不写回）</h3>
+          <div class="expr-row">
+            <span class="k">眨眼</span>
+            <input id="exBlink" type="range" min="0" max="1" step="0.01" value="0" aria-label="眨眼">
+            <span id="exBlinkV" class="val">0.00</span>
+          </div>
+          <div class="expr-row">
+            <span class="k">口型</span>
+            <input id="exMouth" type="range" min="0" max="4" step="1" value="0" aria-label="口型">
+            <span id="exMouthV" class="val">0</span>
+          </div>
+          <div class="expr-row">
+            <span class="k">眉毛</span>
+            <input id="exBrow" type="range" min="-1" max="1" step="0.5" value="0" aria-label="眉毛">
+            <span id="exBrowV" class="val">0</span>
+          </div>
+          <div class="presets" style="margin-top:6px">
+            <button class="btn btn-sm" type="button" data-preset="neutral">中性</button>
+            <button class="btn btn-sm" type="button" data-preset="happy">开心</button>
+            <button class="btn btn-sm" type="button" data-preset="sad">难过</button>
+            <button class="btn btn-sm" type="button" data-preset="surprised">惊讶</button>
+          </div>
+          <p id="exprAvail">载入后检测表情槽位。</p>
+        </section>
+        <section id="issueWrap" hidden>
+          <h3>未求值 / 诊断明细</h3>
+          <ul id="issueList" class="issue-list"></ul>
+        </section>
+      </div>
+    </div>
+    </div><!-- /#partsView -->
+
+    <!-- 事件分页（契约 §2.2；右侧 320px 单栏，不再用弹窗） -->
+    <section id="eventPanel" class="event-panel" role="tabpanel" aria-labelledby="tabEvents" hidden>
+      <!-- 手动选择索引（无包根）时：提示 + 包根输入 -->
+      <div id="voiceRootHost" class="voice-root-host" hidden></div>
+
+      <!-- 索引警告：只展示 voice.js 的解析警告，不参与事件异常判断 -->
+      <div id="voiceIssues" class="voice-issues" hidden>
+        <div class="voice-issues-hd">
+          <svg class="ic" aria-hidden="true"><use href="#i-alert"></use></svg>
+          <span id="voiceIssuesTitle">索引警告</span>
+          <span class="spacer"></span>
+          <button id="voiceIssuesToggle" class="btn btn-sm" type="button">收起</button>
+        </div>
+        <ul id="voiceIssueList" class="voice-issue-list"></ul>
+      </div>
+
+      <div class="voice-summary">
+        <span id="voiceSummaryText" class="voice-summary-text" aria-live="polite">未载入语音包</span>
+        <div class="voice-tools">
+          <select id="voiceStatusFilter" aria-label="按状态筛选事件" title="按状态筛选事件">
+            <option value="all">全部</option>
+            <option value="audio-missing">仅语音缺失</option>
+            <option value="anim-unmapped">仅动画未映射</option>
+            <option value="pending">仅未检查</option>
+            <option value="ok">仅正常</option>
+          </select>
+          <label class="toggle" title="播放台词时联动主编辑器动画（动画未映射时只播语音）">
+            <input id="voiceLinkAnim" type="checkbox" checked><span>联动</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="event-search">
+        <div class="search-wrap">
+          <svg class="ic" aria-hidden="true"><use href="#i-search"></use></svg>
+          <input id="voiceSearch" type="search" placeholder="搜索事件 / 台词 id / 原文 / 动画" autocomplete="off" aria-label="搜索语音事件">
+          <span id="voiceSearchCount" class="search-count" hidden></span>
+        </div>
+        <div id="voiceChips" class="chips" role="group" aria-label="按分类筛选"></div>
+        <div id="voiceEmpty" class="voice-empty" hidden></div>
+      </div>
+
+      <div id="voiceEventList" class="voice-events" role="list"></div>
+
+      <div class="voice-playbar">
+        <span id="voiceNow" class="voice-now dim" title="当前播放">未播放</span>
+        <span id="voiceHint" class="voice-hint dim" aria-live="polite"></span>
+        <input id="voiceSeek" type="range" min="0" max="1000" value="0" disabled aria-label="语音进度">
+        <span id="voiceTime" class="time-label">0.00 / 0.00 s</span>
+        <button id="voiceStop" class="btn btn-sm" type="button" disabled title="停止语音">
+          <svg class="ic" aria-hidden="true"><use href="#i-stop"></use></svg><span>停止</span>
+        </button>
+      </div>
+    </section>
+
+    <div class="foot">
+      <span id="footDirty">无未保存改动</span>
+      <span class="spacer"></span>
+      <button id="footDiag" class="diag-link" type="button" hidden>诊断 0</button>
+      <span id="rendererInfo" class="dim">渲染：—</span>
+    </div>
+  </aside>
+</main>
+
+<!-- 动画条：整行，位于状态栏上方 -->
+<div class="bar bar-anim" role="toolbar" aria-label="动画预览">
+  <div class="grp">
+    <label class="lbl" for="animSel">动画</label>
+    <select id="animSel" disabled>
+      <option value="">（无）</option>
+    </select>
+    <button id="btnPlay" class="btn" type="button" disabled title="播放/暂停（P）">
+      <svg class="ic" aria-hidden="true"><use href="#i-play"></use></svg><span>播放</span><kbd>P</kbd>
+    </button>
+    <button id="btnSetup" class="btn" type="button" disabled title="回到绑定姿态（清除动画，恢复可摆位）">
+      <svg class="ic" aria-hidden="true"><use href="#i-joint"></use></svg><span>绑定姿态</span>
+    </button>
+    <button id="btnStop" class="btn" type="button" disabled title="回到动画开头">
+      <svg class="ic" aria-hidden="true"><use href="#i-skip-back"></use></svg><span>回到开头</span>
+    </button>
+    <label class="toggle" title="循环播放">
+      <input id="loopChk" type="checkbox" checked><span>循环</span>
+    </label>
+    <select id="speedSel" disabled aria-label="播放倍速">
+      <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+      <option value="1" selected>1×</option><option value="2">2×</option>
+    </select>
+  </div>
+  <div class="grp timeline">
+    <input id="scrub" type="range" min="0" max="1000" value="0" disabled aria-label="时间轴">
+    <span id="timeLabel" class="time-label">0.00 / 0.00 s</span>
+  </div>
+</div>
+
+<footer class="statusbar">
+  <span id="statusMsg" class="msg" aria-live="polite">未载入</span>
+  <span class="spacer"></span>
+  <span id="toolHint" class="hint">拖动移动 · 按住 Space 平移 · 滚轮缩放 · <b>?</b> 帮助</span>
+</footer>
+
+<div id="backdrop" class="backdrop" aria-hidden="true"></div>
+
+<!-- 单实例语音播放器（切走事件分页时停止；不放在 hidden 容器里） -->
+<audio id="voiceAudio" preload="metadata"></audio>
+
+<div id="helpOverlay" class="modal" role="dialog" aria-modal="true" aria-labelledby="helpTitle" hidden>
+  <div class="modal-card">
+    <div class="modal-hd">
+      <svg class="ic" aria-hidden="true" style="width:16px;height:16px"><use href="#i-help"></use></svg>
+      <h2 id="helpTitle">操作与快捷键</h2>
+      <span class="spacer"></span>
+      <button id="helpClose" class="btn btn-icon btn-sm" type="button" title="关闭（Esc）">
+        <svg class="ic" aria-hidden="true"><use href="#i-close"></use></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="help-block">
+        <h3>鼠标</h3>
+        <table class="help-table">
+          <tr><td>拖动部件</td><td>移动绑定骨位置（贴图没勾也能拖）</td></tr>
+          <tr><td>中键拖动</td><td>平移视图</td></tr>
+          <tr><td>Space 按住</td><td>临时平移视图（松开恢复移动工具）</td></tr>
+          <tr><td>滚轮</td><td>以指针为中心缩放</td></tr>
+          <tr><td>悬停</td><td>可移动件显示细描边</td></tr>
+        </table>
+      </div>
+      <div class="help-block" id="helpKeys">
+        <h3>键盘</h3>
+        <table class="help-table">
+          <tr><td><kbd>V</kbd></td><td>移动工具</td></tr>
+          <tr><td><kbd>Space</kbd></td><td>按住临时平移（<b>不再播放</b>）</td></tr>
+          <tr><td><kbd>P</kbd></td><td>播放 / 暂停</td></tr>
+          <tr><td><kbd>F</kbd></td><td>适配全部</td></tr>
+          <tr><td><kbd>Shift</kbd>+<kbd>F</kbd></td><td>适配选中部件</td></tr>
+          <tr><td><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd></td><td>微调 1（父骨局部单位），Shift ×10</td></tr>
+          <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>层级下移 / 上移</td></tr>
+          <tr><td><kbd>H</kbd></td><td>显示 / 隐藏选中部件</td></tr>
+          <tr><td><kbd id="helpModKey">Ctrl</kbd>+<kbd>Z</kbd></td><td>撤销</td></tr>
+          <tr><td><kbd id="helpModSave">Ctrl</kbd>+<kbd>S</kbd></td><td>保存文件（有写回目标时；输入框聚焦不劫持）</td></tr>
+          <tr><td><kbd>+</kbd> <kbd>-</kbd></td><td>放大 / 缩小</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>取消拖动 / 清除选择 / 关闭浮层与菜单</td></tr>
+          <tr><td><kbd>?</kbd></td><td>打开本帮助</td></tr>
+        </table>
+      </div>
+      <div class="help-block" style="grid-column:1/-1">
+        <h3>编辑与数据</h3>
+        <table class="help-table">
+          <tr><td>撤销粒度</td><td>一次拖动 / 一次方向键 / 一次层级调整各记一条；没有实际移动不写撤销</td></tr>
+          <tr><td>拖动中按 Esc</td><td>回滚到本次手势开始前</td></tr>
+          <tr><td>吸附</td><td>默认关闭；打开后拖动取整到 1 个单位</td></tr>
+          <tr><td>显示层</td><td>四个显示层可任意叠加；贴图只影响显示，不改变编辑权限</td></tr>
+          <tr><td>显示 / 锁定</td><td>只影响查看器，不写入 JSON</td></tr>
+          <tr><td>保存文件</td><td>就地回写索引目录下的 index.json / model.json / atlas / 贴图；需要 serve.py（只读服务下置灰）</td></tr>
+          <tr><td>另存文件</td><td>下载一个 zip：index.json + model.json + model.atlas + 贴图，纯前端打包</td></tr>
+          <tr><td>导出格式</td><td>运行时 JSON 补丁（骨骼 x/y/rotation/scale + slots 顺序），不能还原 .spine 工程</td></tr>
+        </table>
+        <p class="help-note">输入框 / 下拉框 / 菜单聚焦时不会触发上面的单键快捷键。摆位只在绑定姿态（动画选「（无）」）下进行，预览动画时检查器会给出「返回绑定姿态」的提示。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js"></script>
+<script src="spine-core.js"></script>
+<script src="bundle.js"></script>
+<script src="voice.js"></script>
+<script src="fixtures/cases.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
