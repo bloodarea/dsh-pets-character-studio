@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "DSH Pets Character Studio",
-    "description": "Offline character-pack authoring for DSH Pets. Registers bundled production skills including three-view-parts."
+    "description": "Author and distribute DSH Pets character packs: PSD part extraction, image-generation completion, frame-sequence animation and pre-recorded voices. Hosts the ecosystem license."
   }
 }

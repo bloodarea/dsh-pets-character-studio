@@ -1,94 +1,153 @@
 # DSH Pets Character Studio
 
-[DSH Pets](https://github.com/bloodarea/dsh-pets) 的人物包制作项目。负责立绘与三视图、完整 RGBA 部件、问题标注、Spine 装配与动画检查、离线语音准备，以及最终人物包整理。桌宠窗口、会话管理、事件调度和语音播放由 DSH Pets 运行项目负责。
+**DSH Pets 的人物包制作、规范与社区分发中心。**
 
-当前已有两套本地网页工具、三份图像转骨架脚本与 `three-view-parts` 制作技能；完整的自动装骨、语音生成和一键人物包发布流程仍需后续实现。编辑器能试听语音，不等于桌宠运行时已经完成。
+本仓库与 [DSH Pets](https://github.com/bloodarea/dsh-pets) 共同构成一个开放的 AI Agent 桌宠生态：创作者在 Character Studio 中制作和发布人物包，用户在 DSH Pets 的设置页中发现、下载、安装、更新与切换人物。人物包统一携带可播放的**透明帧序列动画**、**预先生成的语音音频**以及角色配置；运行时根据真实的 Agent 事件触发动画和语音。
 
-## 开始使用
+> **项目状态：设计与管线迁移阶段。** 本 README 同时说明长期目标和当前已存在的工程内容。人物包协议、自动构建发布、社区投稿和运行时人物包商店等尚未完成，不应视为现成可用功能。
 
-两套网页工具只需 Python 3 标准库，不用安装 npm 或 pip 依赖。从本仓库根目录运行：
+## 生态结构
 
-```bash
-# 人物包编辑器：摆位、层级、动画预览、事件语音检查
-python3 tools/character-editor/serve.py --port 8123 --no-browser
-# 打开 http://127.0.0.1:8123/tools/character-editor/
+| 仓库 | 定位 | 负责什么 |
+| --- | --- | --- |
+| **[bloodarea/dsh-pets](https://github.com/bloodarea/dsh-pets)** | 桌宠运行端（面向用户） | 桌宠窗口与动画渲染、预录语音播放、Agent 事件响应、实时会话查看和切换、任务提醒、提示词记录、待办与工作日记，以及人物包下载、安装、更新、卸载和切换 |
+| **[bloodarea/dsh-pets-character-studio](https://github.com/bloodarea/dsh-pets-character-studio)** | 人物制作与分发端（面向创作者） | 人物包格式与校验、三视图/素材管理、动画与语音生产工作流、人物包构建、版本和授权管理、社区 PR 审核、人物包发布与下载索引 |
 
-# 立绘问题标注器：多视图、部件检查、修改要求与拆件工程
-python3 tools/part-annotator/serve.py --port 8124 --no-browser
-# 打开 http://127.0.0.1:8124/tools/part-annotator/
+两者通过**版本化的人物包格式**连接。DSH Pets 内置一个默认的 **DeepSeek 鲸鱼娘**人物包，其他人物包可在运行时按需下载安装。Character Studio 维护人物包规范与社区目录，规划通过 GitHub Releases 等方式分发经过校验的包文件。
+
+**边界原则：** 人物包负责角色表现（动画、语音、配置及事件映射）；会话管理、提示词历史、待办日记、通知与权限判断始终由 DSH Pets 运行时负责。切换人物包不应改变或删除用户的工作数据。
+
+## 目标能力
+
+### 1. 标准化人物包
+
+每个人物包是一套可以独立发布、下载、安装和切换的静态资源，目标包括：
+
+- **身份与来源**：人物 ID、名称、作者、版本、简介、预览、许可证与素材来源。
+- **动画**：带 Alpha 的 PNG/WebP 帧序列或 Sprite Sheet，以及动作名、帧率、尺寸、循环方式、起止过渡等元数据。
+- **预录语音**：创作阶段一次性生成、试听和审核 TTS 音频；人物包携带 OGG 等音频文件及台词清单，**运行时不依赖实时 TTS 接口**。
+- **事件映射**：为任务开始、运行中、完成、失败、待授权、会话切换、桌宠点击、休眠等语义事件绑定动画和语音。
+- **完整性与兼容性**：人物包格式版本、资源引用检查、哈希校验和运行时版本兼容声明。
+
+当前制作路线优先采用**帧序列动画**。Spine 骨骼动画方案已暂停并本地封存，**不属于当前首版支持范围**；未来是否恢复由实际需求决定。
+
+### 2. 创作者制作工作流
+
+目标是让作者从一张角色立绘或一套三视图出发，逐步生成可直接交付给 DSH Pets 的完整人物包：
+
+1. **创建人物工程**：登记作者、角色信息、授权与素材来源，导入立绘、三视图和参考图。
+2. **制作动画**：利用视频/GIF 生成、手工绘制或其他工具制作动作；提取帧序列、抠像生成 Alpha，按需插帧和超分。
+3. **动画验收**：检查人物跨帧一致性、透明边缘、动作完整性、循环衔接及不同动作之间的状态切换。
+4. **制作固定语音**：编写台词，为对应情绪离线生成 TTS；审核发音、音量和时长，保存音频文件与事件关联。
+5. **绑定事件**：将动画、语音与 DSH Pets 约定的语义事件对应，设置优先级、冷却与静默规则。
+6. **预览和构建**：在制作环境预览动作与语音联动，校验人物包格式、必需资源、许可证及文件完整性。
+7. **提交与发布**：作者通过 Pull Request 提交人物包及元数据；审核通过后纳入社区目录，生成可下载版本。
+
+**制作工具应允许逐步扩展。** 作者可以使用自己的美术工具、视频模型、音频工具完成生产；Studio 负责统一输入输出与质量校验，不强制依赖某个生成模型或在线 API。
+
+### 3. 开放式人物包目录与分发
+
+计划由本仓库维护人物包登记信息和下载索引，供 DSH Pets 内置的“人物包管理”设置页使用：
+
+- 官方维护的默认角色和作者自制人物包。
+- 第三方作者通过 GitHub PR 投稿，提交预览、元数据、资源许可与可验证的交付物。
+- CI 自动检查包结构、清单字段、资源引用、文件哈希、大小限制和仓库提交卫生；人工审核角色版权及内容。
+- 审核通过后将版本化 ZIP 等制品发布到 GitHub Releases（或经批准的资源存储），并更新 `assets/characters/index.json` 下载索引。
+- DSH Pets 根据索引完成发现、下载、校验、安装、更新、切换和卸载；下载失败不能破坏当前已安装人物。
+
+**仓库分发策略：** 完整人物包与下载索引放在 `assets/characters/`，随仓库发布，DSH Pets 从远端仓库下载；单文件超过仓库体积上限的帧序列可改用 Release 资产并在索引登记。具体投稿与审核协议尚待制定。
+
+### 4. 默认人物：DeepSeek 鲸鱼娘
+
+初始默认角色是 **DeepSeek 鲸鱼娘**：聪明、略懒、带一点傲娇，具有“白饭、不锈钢盆、大肥鱼、深度睡眠”等社区二创元素。
+
+规划将已设计的固定语音台词与任务、会话及桌宠交互事件对应，使用待机、工作、思考、成功、失败、待授权、睡眠、摸头、甩尾、吃白饭等动画表现不同状态。
+
+默认人物包将随 DSH Pets 运行端提供基础体验；本仓库负责其**可维护的素材生产与规范来源**。默认包如何同步到运行端、如何发版与升级，后续由统一构建流程落实。角色形象、语音及二创素材的使用、修改和再分发权限须分别核实，不因项目代码采用 MIT 许可证而自动获得授权。
+
+## 计划中的人物包结构
+
+以下仅为**目标格式草案**，用于说明文件职责；目录名、字段名和必需项将在正式 Schema 中确定，**当前仓库尚未提供可依此直接安装的正式人物包**。
+
+```text
+<character-id>/
+├── manifest.json          # 人物 ID、版本、作者、许可证、兼容信息等
+├── preview.webp           # 人物列表预览图
+├── animations/            # 透明 PNG/WebP 帧序列或图集
+│   ├── idle/
+│   ├── working/
+│   └── completed/
+├── voices/                # 预合成 OGG 等音频文件
+│   ├── connected_01.ogg
+│   └── task_completed_01.ogg
+├── animations.json        # 动作、帧率、循环和过渡配置
+├── voices.json            # 台词、音频路径及播放元数据
+├── events.json            # Agent/交互事件 → 动作与语音映射
+└── LICENSE                # 素材许可、署名及使用条件
 ```
 
-也可运行各工具的 `start.sh`（Linux/macOS）或 `start.bat`（Windows）自动打开浏览器。两套工具和桌宠仓库的编辑器可使用不同端口同时运行。编辑器只读写本仓库根目录下的素材，不通过兄弟目录符号链接共享可写人物包。
+运行时应提供动作回退机制：非关键动画缺失时可以回退到默认待机等状态，但不能把“任务失败”“等待授权”等真实状态错误展示为任务成功。第三方人物包默认只包含**声明式配置和静态资源**，不允许通过人物包自动执行任意脚本。
 
-工具说明：[人物包编辑器](tools/character-editor/README.md)、[立绘问题标注器](tools/part-annotator/README.md)。
+## 当前仓库内容
 
-图像转骨架脚本另外需要 NumPy、Pillow、SciPy，建议放在独立环境：
+目前处于从 Spine 转向帧序列的过渡期；下列为现有内容，**不代表上述目标功能已经全部实现**。
 
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python scripts/sheet-parts-to-rig.py --help
-```
-
-Windows 使用 `.venv\Scripts\python.exe`。这些旧脚本提供基础骨架，并不自动完成完整语义拆件、网格权重或图集打包；外部 Spine 工具按需要自行配置，不依赖本机参考项目路径。
-
-## 目录与职责
-
-| 目录 | 用途 |
+| 目录 / 文件 | 当前用途或状态 |
 | --- | --- |
-| `tools/character-editor/` | 完整人物包编辑/预览/语音测试工具；DSH Pets 也保留一份 |
-| `tools/part-annotator/` | 制作侧的部件与问题标注工具 |
-| `scripts/*-to-*.py` | 图像去背、切分与基础骨架生成 |
-| `skills/three-view-parts/` | 可分发的三视图到完整部件贴图技能，交付止于贴图与清单 |
-| `assets/source/` | 制作输入与长期保留的源素材，不随 npm 包分发 |
-| `assets/characters/` | 已入库人物包（当前 `deepseek` 样例，含完整署名和许可）与 `index.json` 下载索引；插件分发包不含人物包 |
-| `templates/character-pack/` | DIY 人物包起点：manifest / 许可 / 署名模板与交付自检清单 |
-| `workspace/` | 本地拆件工程与模型环境，不入库 |
-| `output/` | 本地生成记录、临时脚本和验收证据，不入库 |
-| `references/` | 本地参考开源项目，不入库，也不作为工具启动依赖 |
+| `.agents/skills/`（本地忽略） | 项目级本机技能与 API 网关配置，例如 `meta-api-imagegen`、`newapi-multimodal`；凭据不得入库 |
+| `scripts/verify-hygiene.sh`、`scripts/install-hooks.sh` | 提交卫生检查与本地钩子 |
+| `assets/characters/` | **发布区**：完整人物包（`<id>/`，含清单、资源、许可与署名）与下载索引 `index.json`；DSH Pets 从远端仓库下载 |
+| `workspace/texture2d-pack/`、`workspace/three-view-pack/`、`workspace/voice-pack/` | **生产区**（本地、不入库）：人物贴图/设定图、三视图与预录语音的制作输入 |
+| `references/ref-anime/`、`references/ref-texture2d/` | 本地参考：桌宠参考实现与角色图集参考；不入库 |
+| `output/` | 本机生成记录与验收证据，不入库 |
+| `tools/character-editor/` | 旧 Spine 编辑/预览工具（本地保留；帧序列管线跑通后再迁移或移除） |
 
-两个仓库的 `character-editor` 在拆分时来自同一版本。改动共用编辑器时应同步修复并在两边跑自测；目前无跨仓 import、软链接或自动同步。源素材的历史度量与生成记录保留原样，当前状态以实际清单和文件为准。
+### Spine 历史方案
 
-豆包的三视图已随 `assets/source/doubao/` 迁入；本机已有的 51 个豆包语音相关文件也统一保留在本仓 `assets/characters/doubao/`（忽略，不入库、不随 npm 分发）。DSH Pets 只保留 DeepSeek 鲸鱼娘内置人物包。豆包目前不作为已完成或已核实授权的可发布人物包。
+Spine 管线已从仓库移除，不再维护；相关工具、参考项目与样例包只在开发者本地备份。当前只维护**帧序列动画 + 预录语音**路径。
 
-## 向桌宠交付
-
-交付边界是**完整、自包含的人物包**，见 [人物包交付协议](CHARACTER-PACK.md)。Studio 的素材与示例包可以独立修改；DSH Pets 内置包是运行项目选定的版本快照，后续更新通过完整包交付，不自动覆盖另一个仓库。
-
-必须区分三种格式：
-
-1. `three-view-parts` 的贴图与清单、标注器的 `parts-bundle`：制作中间输入。
-2. `character-editor` 的 Spine ZIP：模型、图集、贴图与编辑索引，不含完整人物包元数据/语音/许可。
-3. 最终人物包：以 `manifest.json` 为入口，包含 Spine 资源、状态映射、预览/降级图、可选语音、许可与署名。这才是交给桌宠的产物。
-
-目前请人工整理第 3 类目录并核对协议；尚未实现一键完整包导出或运行时安装功能。
-
-插件与 npm 分发包只带制作工具和技能，**不含人物包**。仓库本身承担人物包分发：`assets/characters/index.json` 登记经 GitHub Releases 发布的完整包（`url` / `sha256` / `size` / `minPluginVersion` / `license`），dsh-pets 运行时从本仓下载；仓库内已入库的 `deepseek` 包是当前样例。装好插件后即可从零 DIY 自己的包：制作 → 按协议自检 → 放 `~/.dsh/pets/characters/<id>/` 或发布为 Release。起点见 [人物包模板](templates/character-pack/README.md)；完整教程待全流程跑通后再补。
-
-## 在 DSH 中加载制作技能
-
-网页工具无需安装插件。只有希望 Agent 目录里出现 `three-view-parts` 时才安装 Studio bundle：
+### 在 DSH 中加载 Character Studio
 
 ```bash
-dsh plugin --profile web add /path/to/dsh-pets-character-studio
-# 随后重启对应 Harness 或重载插件
+dsh plugin --profile <profile> add /path/to/dsh-pets-character-studio
+# 重载插件或重启 DSH 后生效
+
 # 卸载
-dsh plugin --profile web remove dsh-pets-character-studio
+dsh plugin --profile <profile> remove dsh-pets-character-studio
 ```
 
-插件名和技能 provider 均为 `dsh-pets-character-studio`，由本仓入口注册公开技能；`dsh-pets` 不再注册它。项目级本机参数保留在忽略的 `.agents/skills/`，不进入分发包。
+插件名与技能 provider 均为 `dsh-pets-character-studio`，由 `index.js` 注册 `skills/` 下的公开技能（当前 `skills/` 为空，随管线补齐）。`.agents/skills/` 仅用于本地配置，不属于公开分发内容。
 
-## 验证
-
-Node.js 18+ 可运行纯数据自测，无 npm 依赖：
+### 提交卫生检查
 
 ```bash
-npm test
 bash scripts/verify-hygiene.sh --all
+bash scripts/install-hooks.sh  # 可选：安装本地提交钩子
 ```
 
-编辑器与标注器也各有浏览器自测页 `tools/<工具>/selftest.html`。首次迁入尚未跟踪的新文件需要额外按文件列表执行卫生检查，`--all` 只覆盖已跟踪文件。
+`--all` 检查已跟踪文件；新迁入、尚未跟踪的文件可使用 `--files <文件列表>` 单独检查。
+
+## 开发路线图
+
+以下均为**计划**，不代表已完成功能。
+
+| 阶段 | 交付目标 |
+| --- | --- |
+| **P0 · 协议闭环** | 正式人物包 Schema、示例/默认角色资产对接、透明帧动画规范、预录语音规范、事件映射、离线校验与构建 |
+| **P1 · 制作闭环** | 三视图到帧动画与语音的可重复制作流程、预览验收、角色包导出及开发文档 |
+| **P1 · 分发闭环** | 社区投稿模板、PR 校验、Release 制品、下载索引及与 DSH Pets 设置页的人物包管理联调 |
+| **P2 · 生态完善** | 创作者版本管理、角色包兼容性测试、增量更新、更多模板和制作工具 |
+
+**首个完整生态验收标准：** 第三方作者不修改 DSH Pets 源代码，只按公开协议制作并提交人物包；审核发布后，另一位用户能在 DSH Pets 设置页下载安装和切换人物，并通过真实会话事件看到相应动画、听到预录语音。
+
+## 参与贡献
+
+欢迎参与格式讨论、制作工具开发、人物资源投稿、动画与音频工作流改进。目前社区投稿与打包协议尚未发布，请先通过 Issue / Discussion 沟通计划提交的资源类型、素材来源与许可，避免直接提交大量未确认授权的二进制文件。
+
+人物包投稿应遵循以下原则：原创或取得明确再分发许可；说明模型生成和第三方素材来源；允许用户核实署名及使用限制；不提交 API 密钥、个人凭据、未经授权的角色立绘或音频。官方接受 PR 不等于替投稿者取得相关权利。
 
 ## 来源与许可
 
-项目从 [bloodarea/dsh-pets](https://github.com/bloodarea/dsh-pets) 提取，保留原作者、上游与资源来源说明。源代码为 MIT；角色创意素材独立授权，见 [LICENSE](LICENSE) 与 [默认角色署名](assets/characters/deepseek/ATTRIBUTION.md)。DeepSeek 同人资产采用 CC BY-NC-SA 4.0，非官方、禁止商用、演绎同许可。`assets/source/` 中来源未完整核实的素材只作保留的制作输入，不自动列入可发布人物包；正式交付前逐项补齐授权。
+本项目从 [bloodarea/dsh-pets](https://github.com/bloodarea/dsh-pets) 拆分而来。**本仓库是许可证的分发与继承点**：代码采用 MIT（继承上游 `dsh-pets`，其部分代码按 MIT 派生自 [zuodazuoqiang001/dsh-pet](https://github.com/zuodazuoqiang001/dsh-pet)）；角色图片、动画、音频与第三方素材分别遵守其各自许可，详见 [LICENSE](LICENSE)。上游运行端仓库后续将改为引用本仓库的许可文本。
+
+`workspace/` 中来源尚未完整核实的素材仅保留作制作输入，**不会自动纳入可发布人物包**。任何人物包正式发布前均应完成素材许可核对，并在包内保留完整署名链。

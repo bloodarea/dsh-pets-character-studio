@@ -1,8 +1,0 @@
-{
-  "fgIoU": 0.98935,
-  "deltaRGB_mean_onFG": 0.039,
-  "deltaRGB_mean_onHairVisible": 0.017,
-  "hairVisiblePxNotCovered": 0,
-  "pxDiffGT8_onHairVisible": 217,
-  "bodyPxAltered": 3692
-}

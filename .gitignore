@@ -14,21 +14,10 @@
 /playground/
 /sandbox/
 
-# --- 1b. 本地工作区：部件拆分与运行环境（模型文件） ----------------------
-# 只在本机保留：拆件中间产物、模型权重与运行时依赖体积大、可重建，且多为第三方许可。
-# 需要长期保留的产出应落 assets/source/（图片 + manifest），工作现场本身不入库。
+# --- 1b. 本地工作区：素材制作输入与运行环境 ------------------------------
+# 只在本机保留：贴图/语音制作输入、模型权重与运行时依赖体积大、可重建，且多为第三方许可。
+# 需要长期保留的产出应落 assets/（图片 + 清单），工作现场本身不入库。
 /workspace/
-
-# --- 1c. workspace 内部细则（整目录已忽略；这里写明各部分的性质与理由）----
-# 目的：日后若重命名 / 局部解构工作区，照这份清单逐条搬规则，避免误把大文件与
-# 第三方代码提交进来；也让“为什么这些不进库”写在仓里而不是只存在脑子里。
-/workspace/models/                      # See-through 等模型权重：GB 级、可重下、第三方许可
-/workspace/tools/                       # 第三方工具检出（如 see-through，含其自带 .git）
-/workspace/environments/                # 本机 Python / 运行时环境
-/workspace/characters/*/parts-bundles/  # 拆件包与问题标注产物（按需打成 release 交付）
-/workspace/characters/*/annotation-shots/
-/workspace/tmp/                         # 测试脚本、浏览器截图、日志
-/workspace/shared/                      # 参考项目与模板（同 §1 的 references 口径）
 
 # --- 2. 内部文档：docs/ 下的文档资源不入库 --------------------------------
 # 唯一例外：README 需要引用的图片 / 截图，统一放 docs/assets/，且必须是图片格式。
@@ -99,15 +88,10 @@ scratch/
 secrets.json
 local.config.json
 
-# --- 7. 人物包：默认只留本地，按包显式放行（插件分发包不带人物包）-------
-# 仓库是人物包分发源，但入库包必须是完整、授权已核实的交付包：
-# manifest.json + LICENSE + ATTRIBUTION.md + 可用资源，并过卫生脚本复核。
-# 未完成或授权待核实的包（如 doubao）只留本地；新增发布包时在这里加一行
-# !/assets/characters/<id>/ 显式放行，不要图省事放行整个子目录。
-# 同样保留父目录、只忽略内容，否则 Negation（!）无法生效。
-/assets/characters/*
-!/assets/characters/deepseek/
-!/assets/characters/index.json
+# --- 7. 人物包：assets/ 只放已发布的完整人物包与下载索引 -------------------
+# assets/characters/<id>/ = 发布给 DSH Pets 下载的完整人物包（manifest、资源、许可与署名齐备）；
+# assets/characters/index.json = 下载索引。不完整的包留在 workspace/ 生产区，不得入库。
+# 完整性由 scripts/verify-hygiene.sh 校验（新增协议字段时两边同步）。
 
 # --- 8. 项目技能：仅本地使用，不上传远端 ----------------------------------
 # DSH 在 <projectRoot>/.agents/skills 发现项目级技能（每技能一个目录含 SKILL.md）。

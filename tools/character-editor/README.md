@@ -1,6 +1,6 @@
 # 内置人物包管理器（零依赖，本地用）
 
-此工具在 DSH Pets 与 DSH Pets Character Studio 两个项目均保留完整副本。桌宠仓库用于已有包的编辑、预览与调试；完整制作流程见 [Character Studio](https://github.com/bloodarea/dsh-pets-character-studio)。工具从当前仓库读取资产，不直接写入另一仓库。导出的 ZIP 只包含 Spine 子包；完整人物包交付见根目录 [CHARACTER-PACK.md](../../CHARACTER-PACK.md)。
+此工具在 DSH Pets 与 DSH Pets Character Studio 两个项目均保留完整副本。桌宠仓库用于已有包的编辑、预览与调试；完整制作流程见 [Character Studio](https://github.com/bloodarea/dsh-pets-character-studio)。工具从当前仓库读取资产，不直接写入另一仓库。导出的 ZIP 只包含 Spine 子包。
 
 一个不用装任何依赖的网页小工具，用来**手动微调角色部件的摆放（位置 / 旋转 / 缩放）与绘制顺序**，
 并能在同一页里**预览动画、看骨骼与 IK、看网格与权重**。载入一个 `index.json` 就能看整包；

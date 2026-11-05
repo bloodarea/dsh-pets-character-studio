@@ -25,13 +25,13 @@
 *.woff2      binary
 *.ttf        binary
 *.otf        binary
-# 角色模型资源：Spine（最终选定的渲染格式）
+# 角色模型资源：Spine 历史格式（已从仓库移除，保留标记避免旧文件被当文本）
 *.skel       binary
 *.atlas      text eol=lf
 *.spine      binary
 
-# 说明：曾计划使用 Live2D，已定为 Spine。若将来重新引入其他模型格式，
-# 在此补对应二进制/文本标记即可。
+# 说明：Spine 方案已封存，当前管线为帧序列动画。若引入新的模型/图集格式，
+# 在此补对应二进制或文本标记。
 
 # --- 生成物：折叠 diff、标注来源 ------------------------------------------
 *.lock       linguist-generated

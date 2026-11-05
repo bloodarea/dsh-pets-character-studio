@@ -94,9 +94,9 @@ for f in "${files[@]}"; do
     # --- 规则 1：本地参考 / 实验目录（仅仓库根；skills/*/references/ 属于随包资源）---
     references/*|reference/*|experiments/*|playground/*|sandbox/*)
       block "$f" "本地参考项目与实验目录不入库（体积大、第三方代码、许可证风险）"; continue ;;
-    # --- 规则 1b：本地工作区（部件拆分 / 模型与运行环境）---
+    # --- 规则 1b：本地工作区（素材制作输入 / 模型与运行环境）---
     workspace/*)
-      block "$f" "workspace/ 是本地拆件与运行环境目录，不入库（模型 / 中间产物体积大、可重建、许可证待核实）"; continue ;;
+      block "$f" "workspace/ 是本地素材制作与运行环境目录，不入库（贴图/语音输入、模型与中间产物体积大、可重建）"; continue ;;
     # --- 规则 2：docs 只放 README 用图 ---
     docs/*)
       if ! is_docs_asset "$f"; then
@@ -106,15 +106,14 @@ for f in "${files[@]}"; do
     # --- 规则 3：依赖与构建产物 ---
     node_modules/*|.venv/*|.pnpm-store/*|dist/*|build/*|out/*|coverage/*|.vite/*|.turbo/*|.cache/*|*.tsbuildinfo)
       block "$f" "依赖 / 构建产物不入库（由安装与构建流程重建）"; continue ;;
-    # --- 规则 3b：人物包必须是完整可交付包（插件分发包不带人物包）---
-    # 仓库可以承载多个人物包，但每个包都必须带 manifest.json / LICENSE / ATTRIBUTION.md；
-    # 缺任何一项都视为未完成或授权待核实，只留本地、不随仓库分发。
+    # --- 规则 3b：assets/ 只放已发布的完整人物包与下载索引 ---
+    # 完整包需带 manifest.json / LICENSE / ATTRIBUTION.md；未完成的包留在 workspace/ 生产区。
     assets/characters/*)
       rest=${f#assets/characters/}
       if [ "$rest" != "index.json" ]; then
         pack=${rest%%/*}
         if [ "$pack" = "$rest" ]; then
-          block "$f" "assets/characters/ 根下只允许 index.json 与完整人物包目录"
+          block "$f" "assets/characters/ 根下只允许 index.json 与人物包目录"
           continue
         fi
         missing=''
@@ -122,7 +121,7 @@ for f in "${files[@]}"; do
           [ -f "assets/characters/$pack/$need" ] || missing=$need
         done
         if [ -n "$missing" ]; then
-          block "$f" "人物包 $pack 缺少 $missing：未完成或授权待核实的包只留本地，不随仓库分发"
+          block "$f" "人物包 $pack 缺少 $missing：未完成或授权待核实的包只留在 workspace/，不随仓库发布"
           continue
         fi
       fi ;;

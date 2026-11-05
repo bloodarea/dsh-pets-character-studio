@@ -1,25 +1,21 @@
 {
   "name": "dsh-pets-character-studio",
   "version": "0.0.1",
-  "description": "Character-pack authoring tools for DSH Pets: layered artwork, Spine editing and offline voice preparation.",
+  "description": "Character-pack authoring for DSH Pets: PSD part extraction, image-generation completion and frame-sequence animation.",
   "license": "MIT",
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.png",
+    "./package.json": "./package.json"
   },
-  "icon": "./icon.svg",
+  "icon": "./icon.png",
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "files": [
-    "index.js", "cordis.patch.yml", "locale/*.json", "icon.svg", "skills",
-    "templates", "tools", "scripts/*.py", "requirements.txt", "CHARACTER-PACK.md"
+    "index.js", "cordis.patch.yml", "locale/*.json", "icon.png", "skills",
+    "scripts/*.sh", "requirements.txt"
   ],
-  "scripts": {
-    "test": "node tools/character-editor/selftest-node.mjs && node tools/part-annotator/selftest-node.mjs",
-    "editor": "python3 tools/character-editor/serve.py",
-    "annotator": "python3 tools/part-annotator/serve.py"
-  },
-  "keywords": ["dsh", "deepseek-harness", "character-pack", "spine", "authoring"]
+  "keywords": ["dsh", "deepseek-harness", "character-pack", "psd", "authoring"]
 }
