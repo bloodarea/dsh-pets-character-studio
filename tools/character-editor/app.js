@@ -7037,6 +7037,9 @@ async function lipTestRun(opts) {
     state.playing = true;
     updateTimeLabel();
     render();
+    /* 帧视图读数（「帧 N / 总帧」）由 fsSyncBar 维护；不调用它时间轴会一直显示「帧 0 / …」，
+       看起来就像动画停了。 */
+    if (typeof fsSyncBar === "function") fsSyncBar();
     if (typeof dsSyncPlayhead === "function") dsSyncPlayhead();
   };
 
