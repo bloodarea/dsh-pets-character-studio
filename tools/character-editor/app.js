@@ -8454,6 +8454,12 @@
       return dsOpen();
     }
     if (dsKeyDown(e)) return;
+    /* **关键接线**：把带修饰键的组合交给 keymap 分发。
+       踩过的坑：tryKeymapAction 早就写好了，但**从来没有被调用过** ——
+       于是 Ctrl+C / Ctrl+V / Ctrl+Z 之外的所有 keymap 动作都是死代码
+       （实测：选中 Key 按 Ctrl+C 剪贴板仍为空）。
+       这里放在 `if (mod || e.altKey) return;` **之前**，否则 Ctrl 组合永远到不了。 */
+    if (tryKeymapAction(e)) return;
     if (mod || e.altKey) return;
 
     /* 工具：V / G = 移动（PS / Blender 两种习惯），Q = 选择，R = 旋转，S = 缩放，W = 指向，H = 平移视图 */
@@ -12127,6 +12133,12 @@ function frameThumbsState() {
     if (hit) return false;
     const frame = lib.snapFrame(fsXToFrame(p.x));
     const mode = e.shiftKey ? "range" : e.ctrlKey || e.metaKey ? "toggle" : "set";
+    /* **拖拽帧段**：起手那一帧若已在既有帧范围内，记下整段边界，
+       之后拖动就整体平移（Flash 的「拖拽帧」）。否则 spanStart/spanEnd 为 null，
+       拖动退化成重新框选（保持原有行为，不破坏既有交互）。 */
+    const cur = state.edit.timeline.frameRange;
+    const inSpan = !!(cur && Number.isFinite(cur.start) && Number.isFinite(cur.end) &&
+      frame >= cur.start && frame <= cur.end);
     state.drag = {
       mode: "fs-frame",
       pointerId: e.pointerId,
@@ -12134,6 +12146,9 @@ function frameThumbsState() {
       anchor: { x: p.x, y: p.y },
       box: null,
       moved: false,
+      spanStart: inSpan ? cur.start : null,
+      spanEnd: inSpan ? cur.end : null,
+      lastDelta: 0,
     };
     fsSelectFrame(frame, mode);
     try {
@@ -12179,6 +12194,29 @@ function frameThumbsState() {
     if (!d.moved && Math.hypot(p.x - d.anchor.x, p.y - d.anchor.y) < 4) return true;
     d.moved = true;
     const to = lib.snapFrame(fsXToFrame(p.x));
+
+    /* **拖拽帧段（Flash 式）**：如果起手时那一帧已经在既有帧范围内，
+       且按住的是「帧段」而不是新建选择，就把整段一起平移。
+       判据：anchorFrame 落在 drag.spanStart..drag.spanEnd 内。
+       这样「先在标尺上选一段 → 在段内按住拖」= 整段移动（Flash 的拖拽帧），
+       而「在段外按住拖」= 重新框选（保持原行为）。 */
+    if (d.spanStart != null && d.spanEnd != null &&
+        d.anchorFrame >= d.spanStart && d.anchorFrame <= d.spanEnd) {
+      const delta = to - d.anchorFrame;
+      if (delta !== d.lastDelta) {
+        d.lastDelta = delta;
+        /* 预览：把范围按 delta 平移后重画（不写数据） */
+        const a = d.spanStart + delta;
+        const b = d.spanEnd + delta;
+        state.edit.timeline.frameSel = (function () { const l = []; for (let f = a; f <= b; f++) l.push(f); return l; })();
+        state.edit.timeline.frameRange = { start: a, end: b };
+        setStatus("拖拽帧段：第 " + d.spanStart + "–" + d.spanEnd + " 帧 → " + a + "–" + b + "（松开应用，Esc 取消）");
+        dsSyncBars();
+        dsDraw();
+      }
+      return true;
+    }
+
     const a = Math.min(d.anchorFrame, to);
     const b = Math.max(d.anchorFrame, to);
     const list = [];
@@ -12196,6 +12234,29 @@ function frameThumbsState() {
   function fsPointerUp() {
     const d = state.drag;
     if (!d || (d.mode !== "fs-ruler" && d.mode !== "fs-frame")) return false;
+    /* 拖拽帧段松手：真正把 Key 平移过去（一次事务，可撤销） */
+    if (d.mode === "fs-frame" && d.spanStart != null && d.spanEnd != null &&
+        d.anchorFrame >= d.spanStart && d.anchorFrame <= d.spanEnd &&
+        Number.isFinite(d.lastDelta) && d.lastDelta !== 0) {
+      const delta = d.lastDelta;
+      const s0 = d.spanStart;
+      const s1 = d.spanEnd;
+      state.drag = null;
+      /* **关键**：预览阶段已经把 frameRange 改成了「平移后」的位置，
+         而 frameShiftRange() 读的是当前 frameRange —— 直接调会二次平移。
+         所以先还原成原始范围，再执行一次真正的移动。 */
+      const orig = [];
+      for (let f = s0; f <= s1; f++) orig.push(f);
+      state.edit.timeline.frameSel = orig;
+      state.edit.timeline.frameRange = { start: s0, end: s1 };
+      const ok = frameShiftRange(delta);
+      if (!ok) {
+        setStatus("拖拽帧段失败：范围未移动（文档未改动）", "warn");
+      }
+      dsSyncBars();
+      dsDraw();
+      return true;
+    }
     state.drag = null;
     dsSyncBars();
     dsDraw();
@@ -13508,6 +13569,12 @@ function flashBlankFrame(opts) {
     frameBlank: () => flashBlankFrame(),
     delete: () => dsDeleteSelected(),
     copy: () => dsCopySelection(),
+    /* 剪切 = 复制 + 删除（与右键菜单 cutKey 同一套动作，避免两处行为漂移） */
+    cut: () => {
+      const res = dsCopySelection();
+      if (res && res.ok) dsDeleteSelected();
+      return res;
+    },
     paste: () => dsPasteClipboard(state.t),
     selectAll: () => dsSelectAll(),
     play: () => togglePlay(),

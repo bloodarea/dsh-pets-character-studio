@@ -807,11 +807,19 @@ input[type='checkbox']:disabled { cursor: not-allowed; }
   display: flex;
   flex-direction: column;
   gap: 6px;
-  flex: none;
+  /* **不能是 flex:none**：检查器内容较高（约 180px），与工具栏叠加后会超过面板高度，
+     把下方的行区（.ds-body，flex:1 1 auto）挤成 0 —— 实测在 1280×800 下时间轴整块消失。
+     改为可收缩 + 限高 + 内部滚动：面板矮时检查器先让位，行区至少保留 120px。 */
+  flex: 0 1 auto;
+  max-height: 42%;
+  min-height: 0;
+  overflow-y: auto;
   padding: 6px var(--space-3);
   border-top: 1px solid var(--line);
   background: rgba(255, 255, 255, .02);
 }
+/* 行区保底：即使检查器与工具栏都很高，也要留住可视的行 */
+#ds-body { min-height: 120px; }
 .ds-keyinsp[hidden] { display: none; }
 .ds-keyinsp-hd { display: flex; align-items: center; gap: 8px; }
 .ds-keyinsp-title { font-weight: 600; font-size: var(--text-xs); }

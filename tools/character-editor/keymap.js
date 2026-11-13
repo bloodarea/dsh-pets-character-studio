@@ -50,6 +50,8 @@
       requires: { keySelection: true },
     },
     { id: "copy", label: "复制 Key", scope: "timeline-graph", defaultKeys: ["Mod+C"], requires: { keySelection: true } },
+    /* 剪切 = 复制 + 删除。右键菜单里早有 cutKey 分支，但从未绑键（实测发现）。 */
+    { id: "cut", label: "剪切 Key", scope: "timeline-graph", defaultKeys: ["Mod+X"], requires: { keySelection: true } },
     { id: "paste", label: "粘贴 Key", scope: "timeline-graph", defaultKeys: ["Mod+V"], requires: { clipboard: true, animation: true } },
     { id: "selectAll", label: "全选可见 Key", scope: "timeline-graph", defaultKeys: ["Mod+A"], requires: { selectableRows: true } },
     { id: "pan", label: "按住平移（固定通道）", scope: "editor", defaultKeys: ["Space"], reserved: true },
