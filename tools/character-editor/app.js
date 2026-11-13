@@ -6857,81 +6857,6 @@ function lipTestFocusFace() {
 }
 
 /**
- * 填充「基础表情」下拉：只列能提供表情层的动画（有眼/眉轨道）+ 待机/眨眼。
- * 实测 21 个动画里只有 idle/blink 不碰嘴巴，其余 17 个表情都把嘴型锁死成一种，
- * 所以合成时必须让口型接管嘴巴、基础动画只提供眼眉。
- * 必须在包加载后调用（初始化时 state.raw 还是空的，会填出空列表）。
- */
-function lipBaseFillOptions() {
-  const sel = el0("voiceLipBase");
-  if (!sel) return 0;
-  const raw = state.raw;
-  const keep = sel.value;
-  sel.textContent = "";
-  const make = (v, label) => {
-    const op = document.createElement("option");
-    op.value = v;
-    op.textContent = label;
-    sel.appendChild(op);
-  };
-  /* 默认项：用台词所属事件声明的 expression（契约 §3.3 ②/⑤）。
-     只有用户想临时换表情时才从下面的动画列表里挑。 */
-  make("", "事件表情（默认）");
-  const opts = [];
-  for (const n of raw && raw.animations ? Object.keys(raw.animations) : []) {
-    if (n === "__lip_test__" || n.indexOf("talk_") === 0) continue;
-    const a = raw.animations[n];
-    const slots = a && a.slots ? Object.keys(a.slots) : [];
-    const eyeish = slots.filter((s) => s !== "嘴巴").length;
-    if (n === "idle" || n === "blink" || eyeish > 0) {
-      opts.push({ v: n, label: animLabel(n) + (eyeish > 0 ? "" : "（无表情层）") });
-    }
-  }
-  for (const o of opts) make(o.v, o.label);
-  sel.value = keep && (keep === "" || opts.some((x) => x.v === keep)) ? keep : "";
-  return opts.length + 1;
-}
-
-/**
- * 静态预览：把「基础动画 + 口型」混合后装进编辑器（不播音频）。
- * 用途：在不播放的情况下检查某时刻的合成结果；也让口型测试的可视化可以定格验证。
- * @param {{baseAnim?:string, lineId?:string, fps?:number}} opts
- */
-async function lipPreviewStatic(opts) {
-  const o = opts || {};
-  lipTestStop({ silent: true });
-  const line = lipTestLine(o.lineId);
-  if (!line) return { ok: false, reason: "先在台词页选中一条台词" };
-  const gen = await lipKeysForLine(line, { fps: o.fps, silenceThreshold: o.silenceThreshold, smooth: o.smooth });
-  if (!gen.ok) return gen;
-  const TEST_NAME = "__lip_test__";
-  /* 同 lipTestRun：优先用事件声明的 expression 作基础 */
-  const exprParts = eventExpressionOf(line.id);
-  let merged = null;
-  let baseName = null;
-  if (exprParts && !o.baseAnim) {
-    merged = lipSyncMergeFromEvent(exprParts, gen);
-    baseName = "事件表情";
-  } else {
-    baseName = o.baseAnim || (state.anim && state.anim !== TEST_NAME ? state.anim : "idle");
-    merged = lipSyncMerge(baseName, gen);
-  }
-  if (!merged.ok) return { ok: false, reason: merged.reason || "混合失败" };
-  animSetDraft(TEST_NAME, merged.anim);
-  setAnim(TEST_NAME);
-  syncAnimPanel();
-  const view = lipTestFocusFace();
-  /* 记住原视图，供下次停止时恢复 */
-  _lipTest = { animName: TEST_NAME, audio: null, raf: 0, savedAnim: baseName, savedView: view, static: true };
-  state.playing = false;
-  return {
-    ok: true, static: true, animName: TEST_NAME, base: baseName,
-    duration: merged.duration, mouthKeys: merged.mouthKeys, mouthTail: merged.mouthTail,
-    hasEyeLayer: merged.hasEyeLayer, boneTracks: merged.boneTracks,
-  };
-}
-
-/**
  * 取一条台词的口型关键帧。
  * **优先用包内 lipsync.json 的 runs**（运行时真正用的数据），取不到才退回本地包络估算。
  * 返回里带 source 字段标明数据源，供状态栏如实显示。
@@ -6982,7 +6907,7 @@ function lipTestStop(opts) {
   if (!_lipTest) return { ok: true, already: true };
   const t = _lipTest;
   _lipTest = null;
-  if (t.raf) cancelAnimationFrame(t.raf);
+  if (t.raf) clearInterval(t.raf);
   if (t.audio) {
     try { t.audio.pause(); } catch (_) { /* 忽略 */ }
   }
@@ -6996,6 +6921,14 @@ function lipTestStop(opts) {
     try { if (typeof markAnimDirty === "function") markAnimDirty(t.animName); } catch (_) { /* 忽略 */ }
     try { if (typeof renderAnimIdleList === "function") renderAnimIdleList(); } catch (_) { /* 忽略 */ }
   }
+  /* 恢复口型测试期间让出的「表情 override」（嘴巴那一项），
+     否则测试结束后嘴型会一直停在口型的最后一帧。 */
+  if (t.savedOverride && state.expr) {
+    state.expr.override = Object.assign({}, t.savedOverride);
+    try { if (typeof refreshExprUI === "function") refreshExprUI(); } catch (_) { /* 忽略 */ }
+  }
+  /* 让台词行上的「停止」标签复位成「口型」：行按钮的状态取自 _lipTest */
+  try { if (typeof renderVoice === "function") renderVoice(); } catch (_) { /* 忽略 */ }
   /* 恢复脸部放大前的视图 */
   if (t.savedView && !o.keepView) {
     state.zoom = t.savedView.zoom;
@@ -7004,9 +6937,6 @@ function lipTestStop(opts) {
     if (typeof syncZoom === "function") syncZoom();
     render();
   }
-  /* 复位「停止测试」按钮 */
-  const stopBtn = el0("voiceLipStop");
-  if (stopBtn) stopBtn.disabled = true;
   /* 恢复测试前的动画 */
   if (t.savedAnim && !o.keep) {
     try { setAnim(t.savedAnim); } catch (_) { /* 忽略 */ }
@@ -7075,7 +7005,19 @@ async function lipTestRun(opts) {
   audio.preload = "auto";
   /* 放大到脸部：否则嘴巴在整身视图里只有几像素，用户会以为「没动」 */
   const savedView = lipTestFocusFace();
-  _lipTest = { animName: TEST_NAME, audio: audio, raf: 0, savedAnim: savedAnim, savedView: savedView };
+  /* **必须让出嘴巴**：点台词行会触发「表情同步」，把事件表情写进 state.expr.override，
+     而 override 优先于动画 —— 嘴巴会被钉在事件的固定嘴型（如 mouth_快乐），
+     口型动画就看不见了（实测：t 在推进但嘴型恒为 快乐）。
+     override 里值为 null 表示「隐藏该附件」，所以这里要**删键**才是真正释放。 */
+  const savedOverride = state.expr && state.expr.override ? Object.assign({}, state.expr.override) : null;
+  if (state.expr && state.expr.override && Object.prototype.hasOwnProperty.call(state.expr.override, "嘴巴")) {
+    const box = Object.assign({}, state.expr.override);
+    delete box["嘴巴"];
+    state.expr.override = box;
+    try { if (typeof refreshExprUI === "function") refreshExprUI(); } catch (_) { /* 忽略 */ }
+    render();
+  }
+  _lipTest = { animName: TEST_NAME, audio: audio, raf: 0, savedAnim: savedAnim, savedView: savedView, lineId: line.id, savedOverride: savedOverride };
   /* 临时诊断：记录音频生命周期，定位「点了没反应」 */
   state.__lipDebug = { url: String(url).slice(0, 160), events: [], playOk: null, playErr: null };
   for (const ev of ["loadstart", "loadedmetadata", "canplay", "playing", "ended", "error", "stalled"]) {
@@ -7084,6 +7026,8 @@ async function lipTestRun(opts) {
     });
   }
 
+  /* 用 setInterval 而不是 requestAnimationFrame：rAF 在后台/无头页面会被节流到几乎不跑，
+     实测 t 会卡在 0.1s 不动（看起来就是「点了没反应」）。40ms 足够跟手。 */
   const drive = () => {
     if (!_lipTest || _lipTest.audio !== audio) return;
     const dur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : gen.duration;
@@ -7094,7 +7038,6 @@ async function lipTestRun(opts) {
     updateTimeLabel();
     render();
     if (typeof dsSyncPlayhead === "function") dsSyncPlayhead();
-    _lipTest.raf = requestAnimationFrame(drive);
   };
 
   audio.addEventListener("ended", () => {
@@ -7116,16 +7059,13 @@ async function lipTestRun(opts) {
     lipTestStop({ silent: true });
     return { ok: false, reason: "音频播放被拒绝（浏览器策略？）：" + String((e && e.message) || e).slice(0, 60) };
   }
-  _lipTest.raf = requestAnimationFrame(drive);
+  _lipTest.raf = setInterval(drive, 40);
 
   setStatus("口型测试中：「" + (line.text || line.id).slice(0, 18) + "」" +
     merged.mouthKeys + " 个口型 · " + round(gen.duration, 2) + "s · 基础「" + baseName + "」" +
     (merged.hasEyeLayer ? "（含眼眉）" : "") + " · 说完保持 " + String(merged.mouthTail).replace("mouth_", "") +
     " · 数据源 " + (source === "pack-lipsync" ? "lipsync.json" : "本地包络") +
     " —— 听声音看嘴型");
-  /* 按钮状态：测试开始后启用「停止测试」，结束后复位 */
-  const stopBtn = el0("voiceLipStop");
-  if (stopBtn) stopBtn.disabled = false;
   return Object.assign({}, gen, { ok: true, played: true, wrote: wrote, testAnim: TEST_NAME });
 }
 
@@ -7323,7 +7263,6 @@ function renderAnimPage() {
     animExpandAllTracks(ed.sel);
     if (names.length && !state.anim) setAnim(names[0]);
     /* 包刚加载完，补填口型测试的「基础表情」下拉（初始化时 state.raw 还是空的） */
-    if (typeof lipBaseFillOptions === "function") lipBaseFillOptions();
     /* 载入包内 spine/lipsync.json（口型运行时包络）并在状态栏报出校验结果 */
     if (typeof lipsyncLoad === "function") {
       lipsyncLoad().then((r) => {
@@ -11266,6 +11205,18 @@ function renderAnimPage() {
     appendVoiceCount(text, "动画未映射", c.animMissing, "warn");
     text.appendChild(el("span", "vsep-dot", " / "));
     appendVoiceCount(text, "未检查", c.pending, "dim");
+    /* 口型状态并入摘要行：lipsync.json 是独立 sidecar（契约 §3.3），
+       条数与契约校验结果属于包级信息，放这里而不是面板底部。 */
+    const ls = state.lipsync;
+    if (ls && ls.data) {
+      const issues = lipsyncValidate(ls.data);
+      text.appendChild(el("span", "vsep-dot", " · "));
+      const lip = el("span", "voice-count" + (issues.length ? " is-warn" : ""),
+        "口型 " + ls.data.lines.length + (issues.length ? " / " + issues.length + " 项不合规" : " ✓"));
+      lip.title = "lipsync.json：" + ls.path +
+        (issues.length ? "\n" + issues.map((i) => i.code + ": " + i.message).join("\n") : "\n契约校验通过");
+      text.appendChild(lip);
+    }
     if (v.checking) {
       text.appendChild(el("span", "vsep-dot", " · "));
       text.appendChild(el("span", "voice-checking", "检查中…"));
@@ -11489,6 +11440,20 @@ function renderAnimPage() {
     const err = v.lineErrors[line.id];
     if (err) main.appendChild(el("span", "voice-line-error", err));
     row.appendChild(main);
+    /* 每行台词自带「口型」入口：口型是**这一条台词**的属性，
+       所以按钮长在行上，而不是面板底部的全局控件。
+       点它 = 把「待机骨骼 + 该事件声明的表情 + 该台词的口型」三层合成后
+       在主时间轴上播放（用下面的动画时间轴看，不另起一套）。 */
+    const lipPlaying = !!(_lipTest && _lipTest.lineId === line.id);
+    const lipBtn = el("button", "voice-line-lip btn btn-sm" + (lipPlaying ? " on" : ""));
+    lipBtn.type = "button";
+    lipBtn.textContent = lipPlaying ? "停止" : "口型";
+    lipBtn.title = lipPlaying
+      ? "停止这条台词的口型测试"
+      : "口型测试：待机骨骼 + 事件表情 + 本条台词的口型 → 在主时间轴播放（听声音看嘴型）";
+    lipBtn.setAttribute("aria-pressed", lipPlaying ? "true" : "false");
+    lipBtn.setAttribute("aria-label", (lipPlaying ? "停止口型测试 " : "口型测试 ") + line.id);
+    row.appendChild(lipBtn);
     return row;
   }
 
@@ -22642,37 +22607,9 @@ function flashBlankFrame(opts) {
       setVoiceHint("已停止语音");
       setStatus("已停止语音");
     });
-    /* 口型测试：生成当前台词的口型动画并音画同步播放 */
-    const lipTestBtn = el0("voiceLipTest");
-    /* 基础表情下拉：只列「有眼/眉轨道」的动画（这些才能提供表情层）+ 待机/眨眼。
-       实测 21 个动画里只有 idle/blink 不碰嘴巴，其余 17 个表情都把嘴型锁死成一种，
-       所以合成时必须让口型接管嘴巴、基础动画只提供眼眉。 */
-    lipBaseFillOptions();
-    if (lipTestBtn) {
-      lipTestBtn.addEventListener("click", async () => {
-        const stopBtn = el0("voiceLipStop");
-        lipTestBtn.disabled = true;
-        try {
-          const base = el0("voiceLipBase") ? el0("voiceLipBase").value : "";
-          /* 空值 = 用事件声明的 expression（默认）；有值才是用户显式覆盖 */
-          const r = await lipTestRun({ baseAnim: base || null });
-          if (r && r.ok && r.played) {
-            if (stopBtn) stopBtn.disabled = false;
-          } else if (r && !r.ok) {
-            setStatus("口型测试失败：" + (r.reason || "未知原因"), "warn");
-          }
-        } finally {
-          lipTestBtn.disabled = false;
-        }
-      });
-    }
-    const lipStopBtn = el0("voiceLipStop");
-    if (lipStopBtn) {
-      lipStopBtn.addEventListener("click", () => {
-        lipTestStop();
-        lipStopBtn.disabled = true;
-      });
-    }
+    /* 口型入口已移到每行台词上（.voice-line-lip）：口型是「某一条台词」的属性，
+       不该是面板底部的全局控件。原先的 voiceLipTest / voiceLipStop / voiceLipBase /
+       voiceLipMode / voiceLipInfo 全部移除。 */
     el0("voiceSeek").addEventListener("input", (e) => {
       const v = state.voice;
       const a = voiceAudioEl();
@@ -22700,6 +22637,21 @@ function flashBlankFrame(opts) {
         if (line) {
           if (ev) state.voice.selected = ev.event;
           startVoicePlayback(ev, line);
+        }
+        return;
+      }
+      const lipBtn = e.target.closest(".voice-line-lip");
+      if (lipBtn) {
+        const row = lipBtn.closest(".voice-line");
+        const line = row ? voiceFindLine(row.dataset.id) : null;
+        const ev = line ? voiceFindEventOfLine(line) : null;
+        if (line) {
+          if (ev) state.voice.selected = ev.event;
+          /* 三层合成后在主时间轴播放：待机骨骼 + 该事件声明表情 + 本条台词口型。
+             正在测这一条时再点 = 停止。 */
+          const playing = _lipTest && _lipTest.lineId === line.id;
+          if (playing) { lipTestStop(); }
+          else { lipTestRun({ lineId: line.id }).then(() => renderVoice()); }
         }
         return;
       }
@@ -23645,7 +23597,6 @@ function flashBlankFrame(opts) {
       lipsyncPath: () => lipsyncPath(),
       lipsyncUrlCandidates: (rel) => lipsyncUrlCandidates(rel),
       lipPreviewStatic: (opts) => lipPreviewStatic(opts),
-      lipBaseFillOptions: () => lipBaseFillOptions(),
       lipTestRun: (opts) => lipTestRun(opts),
       lipTestStop: (opts) => lipTestStop(opts),
       /* 诊断：F5/F6/F7 的帧匹配到底看到了什么（排查「有 Key 却说没有」用） */
