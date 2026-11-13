@@ -6355,6 +6355,144 @@ let _lipTest = null;   /* { animName, audio, raf, savedAnim } */
  *
  * @returns {{zoom:number, panX:number, panY:number}|null} 原视图，供恢复
  */
+/*
+ * 混合动画：基础动画（表情/待机）+ 口型 → 一条可直接播放的动画
+ *
+ * **为什么需要**：实测 21 个动画里只有 idle / blink 不碰嘴巴，
+ * 其余 17 个表情的嘴巴轨道都把嘴型**锁死成一种**（happy=快乐、sad=不开心…）。
+ * 所以「说话时动嘴」和「用表情」在单条动画里会互相覆盖。
+ *
+ * 用户要的做法：说话时嘴巴跟音频动，说完保持表情的嘴型。
+ * 于是合成一条动画：
+ *   骨骼轨道  ← idle 平铺循环（保证呼吸不中断）
+ *   槽轨道    ← 基础动画的非嘴巴轨道（眼睛/眉毛/眼白/眼珠/睫毛）
+ *   嘴巴轨道  ← 口型关键帧 + 末尾一个「基础动画原本的嘴型」
+ * 这样 0~时长 内嘴巴对口型，最后一帧回到表情嘴型，结束后自然保持。
+ */
+
+/** 深拷贝（结构简单，JSON 即可；不引外部 clone 以免依赖顺序） */
+function lipClone(v) {
+  return v == null ? v : JSON.parse(JSON.stringify(v));
+}
+
+/**
+ * 把一组关键帧按周期平铺，覆盖到 dur。
+ * 例：3.5s 的待机键铺到 4.77s → 第 2 段接在 3.5s 处。
+ * 每段只取 [0, period) 内的键，最后补一个 dur 处的键（值取第一帧），保证末尾不回弹。
+ */
+function lipTileKeys(src, dur) {
+  const keys = Array.isArray(src) ? src : [];
+  if (!keys.length) return [];
+  const period = keys.reduce((m, k) => Math.max(m, Number(k.time) || 0), 0);
+  if (!(period > 0)) return lipClone(keys);
+  const out = [];
+  const cycles = Math.ceil(dur / period) + 1;
+  for (let c = 0; c < cycles; c++) {
+    const off = c * period;
+    for (const k of keys) {
+      const t = (Number(k.time) || 0) + off;
+      if (t >= period * (c + 1) - 1e-9) continue; /* 每段去掉末端，避免与下段首帧同时刻 */
+      if (t > dur + 1e-9) continue;
+      const nk = lipClone(k);
+      nk.time = Math.round(t * 1e6) / 1e6;
+      out.push(nk);
+    }
+  }
+  /* 末尾补帧：取首帧的值，保证 dur 处有确定姿态 */
+  const last = lipClone(keys[0]);
+  last.time = Math.round(dur * 1e6) / 1e6;
+  out.push(last);
+  /* 去重（同时间只留最后一个）并排序 */
+  const byTime = new Map();
+  for (const k of out) byTime.set(k.time, k);
+  return Array.from(byTime.values()).sort((a, b) => a.time - b.time);
+}
+
+/** 取一个动画里某个槽附件轨道的最后一个「非 null」值（即它的固定嘴型） */
+function lipFixedMouthOf(anim) {
+  const t = anim && anim.slots && anim.slots["嘴巴"] ? anim.slots["嘴巴"].attachment : null;
+  if (!Array.isArray(t) || !t.length) return null;
+  for (let i = t.length - 1; i >= 0; i--) {
+    if (t[i] && t[i].name) return t[i].name;
+  }
+  return null;
+}
+
+/**
+ * 合成「基础动画 + 口型」。
+ * @param {string} baseName 基础动画名（表情或 idle/blink）
+ * @param {{keys:Array<{time:number,name:string}>, duration:number}} lip 口型结果
+ * @param {{fps?:number}} [opts]
+ * @returns {{ok:boolean, anim?:object, reason?:string, mouthTail?:string, baseTracks?:number}}
+ */
+function lipSyncMerge(baseName, lip, opts) {
+  const o = opts || {};
+  const raw = state.raw;
+  if (!raw || !raw.animations) return { ok: false, reason: "没有载入动画数据" };
+  if (!lip || !Array.isArray(lip.keys) || !lip.keys.length) return { ok: false, reason: "没有口型关键帧" };
+  const dur = Number.isFinite(lip.duration) && lip.duration > 0
+    ? Math.round(lip.duration * 1e6) / 1e6
+    : Math.round(lip.keys[lip.keys.length - 1].time * 1e6) / 1e6;
+
+  const base = raw.animations[baseName] || null;
+  const idle = raw.animations.idle || null;
+
+  const anim = { bones: {}, slots: {}, duration: dur };
+
+  /* 1) 骨骼轨道：用 idle 平铺循环 —— 说话期间角色仍在呼吸 */
+  if (idle && idle.bones) {
+    for (const bone of Object.keys(idle.bones)) {
+      const fields = idle.bones[bone];
+      if (!fields || typeof fields !== "object") continue;
+      anim.bones[bone] = {};
+      for (const field of Object.keys(fields)) {
+        anim.bones[bone][field] = lipTileKeys(fields[field], dur);
+      }
+    }
+  }
+  /* 基础动画自带的骨骼轨道优先（例如将来某个表情带骨骼） */
+  if (base && base.bones) {
+    for (const bone of Object.keys(base.bones)) {
+      const fields = base.bones[bone];
+      if (!fields || typeof fields !== "object") continue;
+      if (!anim.bones[bone]) anim.bones[bone] = {};
+      for (const field of Object.keys(fields)) anim.bones[bone][field] = lipClone(fields[field]);
+    }
+  }
+
+  /* 2) 槽轨道：基础动画除嘴巴外全部保留（眼睛/眉毛/眼白/眼珠/睫毛） */
+  let baseTracks = 0;
+  if (base && base.slots) {
+    for (const slot of Object.keys(base.slots)) {
+      if (slot === "嘴巴") continue;
+      anim.slots[slot] = lipClone(base.slots[slot]);
+      baseTracks++;
+    }
+  }
+  const hasEyeLayer = baseTracks > 0;
+
+  /* 3) 嘴巴轨道：口型关键帧 + 末尾恢复基础动画原本的嘴型 */
+  const tail = lipFixedMouthOf(base) || "mouth_无表情";
+  const mouthKeys = lip.keys
+    .filter((k) => Number.isFinite(k.time) && k.time >= 0 && k.name && k.time < dur - 1e-9)
+    .map((k) => ({ time: Math.round(k.time * 1e6) / 1e6, name: k.name }));
+  mouthKeys.push({ time: dur, name: tail });
+  const byTime = new Map();
+  for (const k of mouthKeys) byTime.set(k.time, k);
+  anim.slots["嘴巴"] = { attachment: Array.from(byTime.values()).sort((a, b) => a.time - b.time) };
+
+  return {
+    ok: true,
+    anim: anim,
+    mouthTail: tail,
+    baseTracks: baseTracks,
+    hasEyeLayer: hasEyeLayer,
+    boneTracks: Object.keys(anim.bones).length,
+    mouthKeys: anim.slots["嘴巴"].attachment.length,
+    duration: dur,
+  };
+}
+
 function lipTestFocusFace() {
   const mouthIdx = state.slots.findIndex((s) => s.name === "嘴巴");
   if (mouthIdx < 0) return null;
@@ -6368,9 +6506,9 @@ function lipTestFocusFace() {
   const cy = (b.minY + b.maxY) / 2;
   const mouthW = Math.max(4, b.maxX - b.minX);
 
-  /* 以嘴巴为中心取一块区域：宽度给 7 倍嘴宽（能带上一点脸颊与鼻尖），
-     高度按画布比例换算，避免拉伸。 */
-  const regionW = mouthW * 7;
+  /* 以嘴巴为中心取一块区域：宽度给 16 倍嘴宽（能带上整张脸与眉眼），
+     高度按画布比例换算，避免拉伸。倍数太小会只剩一张嘴，看不出表情。 */
+  const regionW = mouthW * 16;
   const regionH = regionW * (viewH() / Math.max(1, viewW()));
   const pad = 20;
   const availW = Math.max(40, viewW() - pad * 2);
@@ -6384,6 +6522,68 @@ function lipTestFocusFace() {
   if (typeof syncZoom === "function") syncZoom();
   render();
   return old;
+}
+
+/**
+ * 填充「基础表情」下拉：只列能提供表情层的动画（有眼/眉轨道）+ 待机/眨眼。
+ * 实测 21 个动画里只有 idle/blink 不碰嘴巴，其余 17 个表情都把嘴型锁死成一种，
+ * 所以合成时必须让口型接管嘴巴、基础动画只提供眼眉。
+ * 必须在包加载后调用（初始化时 state.raw 还是空的，会填出空列表）。
+ */
+function lipBaseFillOptions() {
+  const sel = el0("voiceLipBase");
+  if (!sel) return 0;
+  const raw = state.raw;
+  const keep = sel.value;
+  sel.textContent = "";
+  const opts = [];
+  for (const n of raw && raw.animations ? Object.keys(raw.animations) : []) {
+    if (n === "__lip_test__" || n.indexOf("talk_") === 0) continue;
+    const a = raw.animations[n];
+    const slots = a && a.slots ? Object.keys(a.slots) : [];
+    const eyeish = slots.filter((s) => s !== "嘴巴").length;
+    if (n === "idle" || n === "blink" || eyeish > 0) {
+      opts.push({ v: n, label: animLabel(n) + (eyeish > 0 ? "" : "（无表情层）") });
+    }
+  }
+  for (const o of opts) {
+    const op = document.createElement("option");
+    op.value = o.v;
+    op.textContent = o.label;
+    sel.appendChild(op);
+  }
+  if (opts.length) sel.value = opts.some((x) => x.v === keep) ? keep : "idle";
+  return opts.length;
+}
+
+/**
+ * 静态预览：把「基础动画 + 口型」混合后装进编辑器（不播音频）。
+ * 用途：在不播放的情况下检查某时刻的合成结果；也让口型测试的可视化可以定格验证。
+ * @param {{baseAnim?:string, lineId?:string, fps?:number}} opts
+ */
+async function lipPreviewStatic(opts) {
+  const o = opts || {};
+  lipTestStop({ silent: true });
+  const line = lipTestLine(o.lineId);
+  if (!line) return { ok: false, reason: "先在台词页选中一条台词" };
+  const gen = await lipSyncFromCurrentLine({ lineId: line.id, fps: o.fps, silenceThreshold: o.silenceThreshold, smooth: o.smooth });
+  if (!gen.ok) return gen;
+  const TEST_NAME = "__lip_test__";
+  const baseName = o.baseAnim || (state.anim && state.anim !== TEST_NAME ? state.anim : "idle");
+  const merged = lipSyncMerge(baseName, gen);
+  if (!merged.ok) return { ok: false, reason: merged.reason || "混合失败" };
+  animSetDraft(TEST_NAME, merged.anim);
+  setAnim(TEST_NAME);
+  syncAnimPanel();
+  const view = lipTestFocusFace();
+  /* 记住原视图，供下次停止时恢复 */
+  _lipTest = { animName: TEST_NAME, audio: null, raf: 0, savedAnim: baseName, savedView: view, static: true };
+  state.playing = false;
+  return {
+    ok: true, static: true, animName: TEST_NAME, base: baseName,
+    duration: merged.duration, mouthKeys: merged.mouthKeys, mouthTail: merged.mouthTail,
+    hasEyeLayer: merged.hasEyeLayer, boneTracks: merged.boneTracks,
+  };
 }
 
 /** 取当前台词对象 */
@@ -6452,24 +6652,17 @@ async function lipTestRun(opts) {
     return gen;
   }
 
-  /* 2) 写成临时动画（名字固定，避免污染列表；每次覆盖） */
+  /* 2) 混合：基础动画（表情/待机）+ 口型 → 一条可播放的动画。
+     用户要求：说话时嘴巴跟音频动，说完保持表情的嘴型。
+     基础动画默认取当前选中的那个（所以「先选开心，再点口型测试」= 开心+口型）。 */
   const TEST_NAME = "__lip_test__";
   const lib = animEditLib();
   if (!lib) return { ok: false, reason: "anim-edit 未加载" };
-  /* 同 lipSyncApplyToAnim：直接构造数组（upsertKey 受 animDurationOf 限制写不进多 Key） */
-  const keys = gen.keys
-    .filter((k) => Number.isFinite(k.time) && k.time >= 0 && k.name)
-    .map((k) => ({ time: Math.round(k.time * 1e6) / 1e6, name: k.name }))
-    .sort((a, b) => a.time - b.time);
-  if (!keys.length) return { ok: false, reason: "没有合法的口型关键帧" };
-  const draft = {
-    slots: {},
-    duration: Number.isFinite(gen.duration) && gen.duration > 0
-      ? Math.round(gen.duration * 1e6) / 1e6
-      : keys[keys.length - 1].time,
-  };
-  draft.slots["嘴巴"] = { attachment: keys };
-  const wrote = keys.length;
+  const baseName = o.baseAnim || (state.anim && state.anim !== TEST_NAME ? state.anim : "idle");
+  const merged = lipSyncMerge(baseName, gen);
+  if (!merged.ok) return { ok: false, reason: merged.reason || "混合失败" };
+  const draft = merged.anim;
+  const wrote = merged.mouthKeys;
 
   const savedAnim = state.anim;
   animSetDraft(TEST_NAME, draft);
@@ -6530,7 +6723,9 @@ async function lipTestRun(opts) {
   _lipTest.raf = requestAnimationFrame(drive);
 
   setStatus("口型测试中：「" + (line.text || line.id).slice(0, 18) + "」" +
-    gen.keys.length + " 个口型 · " + round(gen.duration, 2) + "s —— 听声音看嘴型");
+    merged.mouthKeys + " 个口型 · " + round(gen.duration, 2) + "s · 基础「" + animLabel(baseName) + "」" +
+    (merged.hasEyeLayer ? "（含眼眉）" : "") + " · 说完保持 " + String(merged.mouthTail).replace("mouth_", "") +
+    " —— 听声音看嘴型");
   /* 按钮状态：测试开始后启用「停止测试」，结束后复位 */
   const stopBtn = el0("voiceLipStop");
   if (stopBtn) stopBtn.disabled = false;
@@ -6730,6 +6925,8 @@ function renderAnimPage() {
     ed.sel = names[0] || "";
     animExpandAllTracks(ed.sel);
     if (names.length && !state.anim) setAnim(names[0]);
+    /* 包刚加载完，补填口型测试的「基础表情」下拉（初始化时 state.raw 还是空的） */
+    if (typeof lipBaseFillOptions === "function") lipBaseFillOptions();
     syncAnimPanel();
   }
 
@@ -22032,12 +22229,17 @@ function flashBlankFrame(opts) {
     });
     /* 口型测试：生成当前台词的口型动画并音画同步播放 */
     const lipTestBtn = el0("voiceLipTest");
+    /* 基础表情下拉：只列「有眼/眉轨道」的动画（这些才能提供表情层）+ 待机/眨眼。
+       实测 21 个动画里只有 idle/blink 不碰嘴巴，其余 17 个表情都把嘴型锁死成一种，
+       所以合成时必须让口型接管嘴巴、基础动画只提供眼眉。 */
+    lipBaseFillOptions();
     if (lipTestBtn) {
       lipTestBtn.addEventListener("click", async () => {
         const stopBtn = el0("voiceLipStop");
         lipTestBtn.disabled = true;
         try {
-          const r = await lipTestRun();
+          const base = el0("voiceLipBase") ? el0("voiceLipBase").value : null;
+          const r = await lipTestRun({ baseAnim: base });
           if (r && r.ok && r.played) {
             if (stopBtn) stopBtn.disabled = false;
           } else if (r && !r.ok) {
@@ -23013,6 +23215,9 @@ function flashBlankFrame(opts) {
       /* 音频 → 口型动画（动态映射）：预览关键帧 / 生成动画 */
       lipSyncPreview: (opts) => lipSyncFromCurrentLine(opts),
       lipSyncGenerate: (opts) => lipSyncGenerate(opts),
+      lipSyncMerge: (base, lip, opts) => lipSyncMerge(base, lip, opts),
+      lipPreviewStatic: (opts) => lipPreviewStatic(opts),
+      lipBaseFillOptions: () => lipBaseFillOptions(),
       lipTestRun: (opts) => lipTestRun(opts),
       lipTestStop: (opts) => lipTestStop(opts),
       /* 诊断：F5/F6/F7 的帧匹配到底看到了什么（排查「有 Key 却说没有」用） */

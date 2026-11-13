@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>内置人物包管理器 0.3.0</title>
-<link rel="stylesheet" href="ui.css?v=0.9.206">
+<link rel="stylesheet" href="ui.css?v=0.9.210">
 </head>
 <body>
 
@@ -418,7 +418,11 @@
           <svg class="ic" aria-hidden="true"><use href="#i-stop"></use></svg><span>停止</span>
         </button>
         <!-- 口型测试：把当前台词的音频动态映射成 Spine 口型关键帧，
-             一边播音频一边驱动角色嘴型，让你直接听声音看嘴动判断对不对 -->
+             一边播音频一边驱动角色嘴型，让你直接听声音看嘴动判断对不对。
+             基础表情：口型会与它合成一条动画（保留它的眼/眉，说完保持它的嘴型）。 -->
+        <select id="voiceLipBase" class="btn btn-sm" aria-label="口型测试的基础表情" title="口型会与这个动画合成：保留它的眼眉，说完保持它的嘴型">
+          <option value="idle">待机</option>
+        </select>
         <button id="voiceLipTest" class="btn btn-sm" type="button" title="口型测试：生成当前台词的口型动画并同步播放（听声音看嘴型）">
           <span>口型测试</span>
         </button>
@@ -767,31 +771,31 @@
   </div>
 </div>
 
-<script src="version.js?v=0.9.206"></script><script src="icons.js?v=0.9.206"></script>
-<script src="spine-core.js?v=0.9.206"></script>
-<script src="bundle.js?v=0.9.206"></script>
-<script src="bone-edit.js?v=0.9.206"></script>
-<script src="track-edit.js?v=0.9.206"></script>
-<script src="pose-tools.js?v=0.9.206"></script>
-<script src="ik-aim.js?v=0.9.206"></script>
-<script src="timeline.js?v=0.9.206"></script>
-<script src="frame-timeline.js?v=0.9.206"></script>
-<script src="pose-compare.js?v=0.9.206"></script>
-<script src="key-inspector.js?v=0.9.206"></script>
-<script src="curve-presets.js?v=0.9.206"></script>
-<script src="deform-edit.js?v=0.9.206"></script>
-<script src="anim-markers.js?v=0.9.206"></script>
-<script src="frame-thumbs.js?v=0.9.206"></script>
-<script src="audio-wave.js?v=0.9.206"></script>
-<script src="lip-sync.js?v=0.9.206"></script>
-<script src="curve-edit.js?v=0.9.206"></script>
-<script src="batch-edit.js?v=0.9.206"></script>
-<script src="keymap.js?v=0.9.206"></script>
-<script src="anim-edit.js?v=0.9.206"></script>
-<script src="slot-groups.js?v=0.9.206"></script>
-<script src="event-names.js?v=0.9.206"></script>
-<script src="voice.js?v=0.9.206"></script>
-<script src="fixtures/cases.js?v=0.9.206"></script>
-<script src="app.js?v=0.9.206"></script>
+<script src="version.js?v=0.9.210"></script><script src="icons.js?v=0.9.210"></script>
+<script src="spine-core.js?v=0.9.210"></script>
+<script src="bundle.js?v=0.9.210"></script>
+<script src="bone-edit.js?v=0.9.210"></script>
+<script src="track-edit.js?v=0.9.210"></script>
+<script src="pose-tools.js?v=0.9.210"></script>
+<script src="ik-aim.js?v=0.9.210"></script>
+<script src="timeline.js?v=0.9.210"></script>
+<script src="frame-timeline.js?v=0.9.210"></script>
+<script src="pose-compare.js?v=0.9.210"></script>
+<script src="key-inspector.js?v=0.9.210"></script>
+<script src="curve-presets.js?v=0.9.210"></script>
+<script src="deform-edit.js?v=0.9.210"></script>
+<script src="anim-markers.js?v=0.9.210"></script>
+<script src="frame-thumbs.js?v=0.9.210"></script>
+<script src="audio-wave.js?v=0.9.210"></script>
+<script src="lip-sync.js?v=0.9.210"></script>
+<script src="curve-edit.js?v=0.9.210"></script>
+<script src="batch-edit.js?v=0.9.210"></script>
+<script src="keymap.js?v=0.9.210"></script>
+<script src="anim-edit.js?v=0.9.210"></script>
+<script src="slot-groups.js?v=0.9.210"></script>
+<script src="event-names.js?v=0.9.210"></script>
+<script src="voice.js?v=0.9.210"></script>
+<script src="fixtures/cases.js?v=0.9.210"></script>
+<script src="app.js?v=0.9.210"></script>
 </body>
 </html>
