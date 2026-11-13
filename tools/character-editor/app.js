@@ -6108,29 +6108,183 @@
     if (!slotRows.length) slotsBox.appendChild(el("p", "anim-empty-note", "该动画没有槽附件轨道。"));
   }
 
+/*
+ * 动画分页：动画列表渲染（修复）
+ *
+ * **问题背景**：HTML 里的容器是 animIdleWrap / animIdleList / animIdleCount
+ * 与 animSeqWrap / animSeqList / animSeqCount（0.9.78 之后的结构），
+ * 但 app.js 里的 renderAnimTracks 还在找 animBones / animSlots / animEditSel ——
+ * 那些元素早已不存在。于是 renderAnimTracks 抛错被 try/catch 吞掉，
+ * 列表永远空白，而 animEmpty 还显示「未载入动画」的误导文案。
+ *
+ * 这是 app.js 事故恢复时留下的错配：恢复目标是「让 selftest 全绿」，
+ * 而自检只覆盖纯逻辑模块，DOM 渲染代码不在范围内。
+ *
+ * 本文件负责：把动画列表真正渲染进 animIdleList / animSeqList。
+ */
+
+/** 一行动画列表项（可点击选中 / 再次点击取消） */
+function animListItem(name, label, meta, opts) {
+  const o = opts || {};
+  const row = el("button", "anim-item" + (o.selected ? " is-selected" : ""));
+  row.type = "button";
+  row.setAttribute("aria-pressed", o.selected ? "true" : "false");
+  row.title = o.title || label || name;
+  const nm = el("span", "anim-item-name", label || name);
+  row.appendChild(nm);
+  if (meta) row.appendChild(el("span", "anim-item-meta", meta));
+  if (o.badge) row.appendChild(el("span", "anim-item-badge", o.badge));
+  if (o.onClick) row.addEventListener("click", o.onClick);
+  return row;
+}
+
+/**
+ * 渲染「Spine · 待机动作」列表。
+ * 数据源：state.model.animations（Map），与时间轴/播放用的是同一份。
+ */
+function renderAnimIdleList() {
+  const wrap = el0("animIdleWrap");
+  const list = el0("animIdleList");
+  const count = el0("animIdleCount");
+  if (!wrap || !list) return 0;
+
+  const names = state.model && state.model.animations ? Array.from(state.model.animations.keys()) : [];
+  list.textContent = "";
+  if (count) count.textContent = String(names.length);
+  wrap.hidden = names.length === 0;
+  if (!names.length) return 0;
+
+  const fps = tlFps();
+  const cur = state.animEdit.sel || state.anim || "";
+  for (const name of names) {
+    const dur = animDuration(name);
+    const frames = Math.round(dur * fps);
+    const keys = (() => {
+      /* 用 anim-edit 的扫描结果算总 Key 数，避免自己再写一套 */
+      const lib = animEditLib();
+      const draft = animDraft(name);
+      if (!lib || !draft) return 0;
+      try {
+        const scan = lib.scanTracks(draft);
+        let n = 0;
+        for (const b of scan.bones) for (const t of b.tracks) n += t.keys ? t.keys.length : 0;
+        for (const s of scan.slots) for (const t of s.tracks) n += t.keys ? t.keys.length : 0;
+        return n;
+      } catch (_) { return 0; }
+    })();
+    const meta = round(dur, 2) + "s · " + frames + " 帧 · " + keys + " key";
+    list.appendChild(animListItem(name, animLabel(name), meta, {
+      selected: name === cur,
+      title: animLabel(name) + "（" + name + "）· " + meta,
+      onClick: () => setAnimEditSelection(name),
+    }));
+  }
+  return names.length;
+}
+
+/**
+ * 渲染「序列帧 · 复杂动作」列表。
+ * 数据源：catalog 里的 sequence 注册表。拿不到就隐藏该区（不编造数据）。
+ */
+function renderAnimSeqList() {
+  const wrap = el0("animSeqWrap");
+  const list = el0("animSeqList");
+  const count = el0("animSeqCount");
+  if (!wrap || !list) return 0;
+
+  list.textContent = "";
+  const seqs = animSequenceEntries();
+  if (count) count.textContent = String(seqs.length);
+  wrap.hidden = seqs.length === 0;
+  if (!seqs.length) return 0;
+
+  for (const s of seqs) {
+    const meta = (s.frames != null ? s.frames + " 帧" : "") + (s.fps ? " · " + s.fps + "fps" : "");
+    list.appendChild(animListItem(s.id, s.label || s.id, meta, {
+      title: (s.label || s.id) + "（序列帧，只读）",
+      badge: "序列帧",
+      onClick: () => setStatus("序列帧动画「" + (s.label || s.id) + "」是只读的，请在序列帧编辑器里改", "warn"),
+    }));
+  }
+  return seqs.length;
+}
+
+/** 从 catalog 里取出序列帧条目；没有就返回空数组（不编造） */
+function animSequenceEntries() {
+  const out = [];
+  const cat = state.catalog;
+  if (!cat) return out;
+  /* 兼容几种可能的结构，任一层存在就用它 */
+  const reg = cat.registries || cat;
+  const seq = reg && (reg.sequence || reg.sequences);
+  const push = (id, v) => {
+    if (!id) return;
+    const o = v && typeof v === "object" ? v : {};
+    out.push({
+      id: id,
+      label: o.label || o.name || animLabel(id),
+      frames: Number.isFinite(o.frames) ? o.frames : (Array.isArray(o.frameList) ? o.frameList.length : null),
+      fps: Number.isFinite(o.fps) ? o.fps : null,
+    });
+  };
+  if (Array.isArray(seq)) {
+    for (const it of seq) {
+      if (typeof it === "string") push(it, null);
+      else if (it && typeof it === "object") push(it.id || it.name || it.clipId, it);
+    }
+  } else if (seq && typeof seq === "object") {
+    for (const k of Object.keys(seq)) push(k, seq[k]);
+  }
+  return out;
+}
+
+/**
+ * 动画分页总渲染（替代原来的 renderAnimTracks 调用点）。
+ * 保留轨道区（animBones/animSlots 若存在则照旧渲染；不存在就跳过，不再抛错）。
+ */
+function renderAnimPage() {
+  const panel = el0("animPanel");
+  if (!panel) return;
+  if (!state.animEdit.open) return;
+
+  const idleN = renderAnimIdleList();
+  const seqN = renderAnimSeqList();
+
+  /* 空态提示：只有「两个列表都空」时才显示，且文案要准确 */
+  const empty = el0("animEmpty");
+  if (empty) {
+    empty.hidden = idleN + seqN > 0;
+    if (idleN + seqN === 0) {
+      empty.textContent = "这个包没有可编辑的动画（model.json 里没有 animations，也没有序列帧）。";
+    }
+  }
+
+  /* 轨道区：容器存在才渲染（当前 HTML 没有这两个容器，所以会被跳过） */
+  const warn = el0("animWarn");
+  const msgs = [];
+  try {
+    if (el0("animBones") && el0("animSlots")) renderAnimTracks();
+  } catch (e) {
+    msgs.push("轨道渲染失败：" + ((e && e.message) || String(e)));
+  }
+  if (warn) {
+    warn.hidden = msgs.length === 0;
+    warn.textContent = msgs.join("；");
+    warn.classList.toggle("is-error", msgs.length > 0);
+  }
+}
+
   function renderAnimPanel() {
     const panel = el0("animPanel");
     if (!panel) return;
     if (!state.animEdit.open) return;
     const ed = state.animEdit;
     const names = state.model ? Array.from(state.model.animations.keys()) : [];
-    if (!ed.sel && names.length) ed.sel = state.anim || names[0];
-    el0("animEmpty").hidden = names.length > 0;
-    const warn = el0("animWarn");
-    const msgs = [];
-    if (state.model && !names.length) msgs.push("model.json 里没有 animations，动画页只提交时长/关键帧到已有动画。");
-    try {
-      renderAnimTracks();
-    } catch (e) {
-      msgs.push("轨道渲染失败：" + ((e && e.message) || String(e)));
-      const bonesBox = el0("animBones");
-      const slotsBox = el0("animSlots");
-      if (bonesBox) bonesBox.textContent = "";
-      if (slotsBox) slotsBox.textContent = "";
-    }
-    warn.hidden = msgs.length === 0;
-    warn.textContent = msgs.join("；");
-    warn.classList.toggle("is-error", msgs.length > 0);
+    if (!ed.sel && !ed.selUserCleared && names.length) ed.sel = state.anim || names[0];
+    /* **改为调用 renderAnimPage**：它会真正填充 animIdleList / animSeqList。
+       原来的 renderAnimTracks 只认 animBones/animSlots（当前 HTML 没有），
+       所以列表永远空白 —— 这是事故恢复留下的 DOM 错配。 */
+    renderAnimPage();
   }
 
   function syncAnimPanel() {
@@ -6194,6 +6348,8 @@
       ed.durInput = null;
       setAnim("");
       syncAnimPanel();
+      renderAnimIdleList();
+      renderAnimSeqList();
       setStatus("已取消动画选择");
       return;
     }
@@ -6205,6 +6361,11 @@
     animExpandAllTracks(name);
     setAnim(name);
     syncAnimPanel();
+    /* **高亮刷新**：setAnim 内部只同步了 animSel 下拉框（该元素已不存在），
+       不会重画动画列表，所以 is-selected 会停在旧项上（实测：点「打招呼」后
+       高亮仍停在「待机」）。这里显式再渲染一次列表。 */
+    renderAnimIdleList();
+    renderAnimSeqList();
   }
 
   /**
@@ -19419,24 +19580,24 @@ function flashBlankFrame(opts) {
   }
 
   function graphSetTab(tab) {
-    /* 规划书 §2.1：三种模式共用同一份时间状态与动画草稿，这里只切「看哪一层」 */
-    const want = tab === "graph" ? "graph" : tab === "frame" ? "frame" : "dopesheet";
+    /* **时间轴固定为 Frame 帧视图**：Dopesheet / Graph 的切换按钮已从界面移除，
+       所以这里强制 want = "frame"，不再接受 dopesheet / graph。
+       注意：底层的 dsCanvas / dsBuild / dsView / graphDraw 全部保留 ——
+       Frame 视图的帧格、轨道树、缩略图、波形都画在 dsCanvas 上，
+       Graph 的曲线绘制代码也留着（只是不再有入口），这样不会破坏任何现有能力。
+       函数名保持 graphSetTab 不改，避免 5 处调用点一起动。 */
+    const want = "frame";
     state.edit.timeline.tab = want;
     if (typeof savePrefs === "function") savePrefs();
     const dope = el0("dsCanvas");
     const graph = el0("graphCanvas");
-    if (dope) dope.hidden = want === "graph";
-    if (graph) graph.hidden = want !== "graph";
+    if (dope) dope.hidden = false;
+    if (graph) graph.hidden = true;
     const b0 = el0("dsTabFrame");
-    const b1 = el0("dsTabDope");
-    const b2 = el0("dsTabGraph");
-    if (b0) b0.setAttribute("aria-pressed", want === "frame" ? "true" : "false");
-    if (b1) b1.setAttribute("aria-pressed", want === "dopesheet" ? "true" : "false");
-    if (b2) b2.setAttribute("aria-pressed", want === "graph" ? "true" : "false");
+    if (b0) b0.setAttribute("aria-pressed", "true");
     syncDsGraphBar();
     fsSyncBar();
     dsDraw();
-    graphDraw();
     return want;
   }
 

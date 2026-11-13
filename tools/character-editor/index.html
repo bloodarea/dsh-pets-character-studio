@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>内置人物包管理器 0.3.0</title>
-<link rel="stylesheet" href="ui.css?v=0.9.192">
+<link rel="stylesheet" href="ui.css?v=0.9.198">
 </head>
 <body>
 
@@ -464,12 +464,11 @@
   <div id="dsSplit" class="ds-split" role="separator" aria-orientation="horizontal" aria-label="拖动调整时间轴高度" tabindex="0" title="拖动调整高度（160–420px）"></div>
   <div class="ds-bar" role="toolbar" aria-label="时间轴工具">
     <span class="ds-title">时间轴</span>
-    <!-- 三种视图共用同一份 Animation Document 与时间状态（规划书 §1.3 / §2.1）。
-         帧视图 = Flash 式逐帧；Dopesheet = 关键帧批量管理；Graph = 曲线。 -->
+    <!-- 时间轴固定为 Frame 帧视图（Flash 式逐帧）。Dopesheet / Graph 的切换入口已移除，
+         但底层的 dsCanvas / dsBuild / dsView 仍然保留 —— Frame 视图的帧格、轨道树、
+         缩略图、波形全都画在 dsCanvas 上，靠那套数据管线驱动。 -->
     <span class="ds-tabs" role="tablist" aria-label="时间轴视图">
-      <button id="dsTabFrame" class="btn btn-sm" type="button" role="tab" aria-pressed="false" title="帧视图：Flash 式连续帧格，逐帧选择与帧范围操作">Frame</button>
-      <button id="dsTabDope" class="btn btn-sm" type="button" role="tab" aria-pressed="true" title="关键帧视图：批量管理关键帧时间">Dopesheet</button>
-      <button id="dsTabGraph" class="btn btn-sm" type="button" role="tab" aria-pressed="false" title="曲线视图（P1）">Graph</button>
+      <button id="dsTabFrame" class="btn btn-sm" type="button" role="tab" aria-pressed="true" title="帧视图：Flash 式连续帧格，逐帧选择与帧范围操作">Frame</button>
     </span>
     <!-- 帧视图专用工具条（Dopesheet/Graph 下隐藏）：帧选择读数、上一帧/下一帧、帧吸附、FPS -->
     <span id="dsFrameBar" class="ds-frame-bar" role="group" aria-label="帧视图工具" hidden>
@@ -760,30 +759,30 @@
   </div>
 </div>
 
-<script src="version.js?v=0.9.192"></script><script src="icons.js?v=0.9.192"></script>
-<script src="spine-core.js?v=0.9.192"></script>
-<script src="bundle.js?v=0.9.192"></script>
-<script src="bone-edit.js?v=0.9.192"></script>
-<script src="track-edit.js?v=0.9.192"></script>
-<script src="pose-tools.js?v=0.9.192"></script>
-<script src="ik-aim.js?v=0.9.192"></script>
-<script src="timeline.js?v=0.9.192"></script>
-<script src="frame-timeline.js?v=0.9.192"></script>
-<script src="pose-compare.js?v=0.9.192"></script>
-<script src="key-inspector.js?v=0.9.192"></script>
-<script src="curve-presets.js?v=0.9.192"></script>
-<script src="deform-edit.js?v=0.9.192"></script>
-<script src="anim-markers.js?v=0.9.192"></script>
-<script src="frame-thumbs.js?v=0.9.192"></script>
-<script src="audio-wave.js?v=0.9.192"></script>
-<script src="curve-edit.js?v=0.9.192"></script>
-<script src="batch-edit.js?v=0.9.192"></script>
-<script src="keymap.js?v=0.9.192"></script>
-<script src="anim-edit.js?v=0.9.192"></script>
-<script src="slot-groups.js?v=0.9.192"></script>
-<script src="event-names.js?v=0.9.192"></script>
-<script src="voice.js?v=0.9.192"></script>
-<script src="fixtures/cases.js?v=0.9.192"></script>
-<script src="app.js?v=0.9.192"></script>
+<script src="version.js?v=0.9.198"></script><script src="icons.js?v=0.9.198"></script>
+<script src="spine-core.js?v=0.9.198"></script>
+<script src="bundle.js?v=0.9.198"></script>
+<script src="bone-edit.js?v=0.9.198"></script>
+<script src="track-edit.js?v=0.9.198"></script>
+<script src="pose-tools.js?v=0.9.198"></script>
+<script src="ik-aim.js?v=0.9.198"></script>
+<script src="timeline.js?v=0.9.198"></script>
+<script src="frame-timeline.js?v=0.9.198"></script>
+<script src="pose-compare.js?v=0.9.198"></script>
+<script src="key-inspector.js?v=0.9.198"></script>
+<script src="curve-presets.js?v=0.9.198"></script>
+<script src="deform-edit.js?v=0.9.198"></script>
+<script src="anim-markers.js?v=0.9.198"></script>
+<script src="frame-thumbs.js?v=0.9.198"></script>
+<script src="audio-wave.js?v=0.9.198"></script>
+<script src="curve-edit.js?v=0.9.198"></script>
+<script src="batch-edit.js?v=0.9.198"></script>
+<script src="keymap.js?v=0.9.198"></script>
+<script src="anim-edit.js?v=0.9.198"></script>
+<script src="slot-groups.js?v=0.9.198"></script>
+<script src="event-names.js?v=0.9.198"></script>
+<script src="voice.js?v=0.9.198"></script>
+<script src="fixtures/cases.js?v=0.9.198"></script>
+<script src="app.js?v=0.9.198"></script>
 </body>
 </html>
