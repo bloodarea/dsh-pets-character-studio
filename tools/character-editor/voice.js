@@ -461,6 +461,7 @@
         } else if (line.animationStatus === "unknown") {
           out.unknownAnimation++;
         }
+        /* animationStatus === "none"（v3：事件不声明动画）不计入任何异常计数 */
       }
       if (ev.status === "ok") out.okEvents++;
       if (ev.hasIssues === true) out.issueEvents++;
@@ -484,9 +485,9 @@
   }
 
   /**
-   * lines[].animation 是语义标签（greeting / happy / working…），模型里通常只有
-   * idle / working / attention / done / failed / turn。默认精确同名匹配；不猜映射。
-   * 唯一例外是调用方显式给出的 opts.animationAliases（语义标签 → 实际动画名）。
+   * 事件 → 动画名的权威来源是 events.json 的 events[].animation
+   * （v2 起 voice 索引不再有 lines[].animation 字段）。
+   * opts.animationAliases 仍可显式给出额外映射；默认按 animation 字段精确匹配，不猜。
    */
   function aliasTarget(aliases, label) {
     if (!aliases || typeof label !== "string") return null;
@@ -566,7 +567,12 @@
       l.audioStatus = audioStatus;
       l.audioDetail = audioDetail;
 
-      if (animations === null) {
+      /* v3（§7.3）：事件不再声明 Spine 动画 —— 无 animation 字段即「不适用」，
+         不是「未映射」。v2 包有该字段，行为不变。 */
+      if (typeof l.animation !== "string" || !l.animation) {
+        l.animationStatus = "none";
+        l.animationDetail = "该事件不声明 Spine 动画（v3：动画由 Runtime 调度）";
+      } else if (animations === null) {
         l.animationStatus = "unknown";
         l.animationDetail = "未载入角色模型，动画存在性未检查";
       } else {

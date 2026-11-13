@@ -336,6 +336,345 @@ def best_effort_fsync_dir(base_dir):
 
 
 # --------------------------------------------------------------------------- #
+# 事件表保存（只写 events.json；与 /api/save-bundle 完全独立的一条链路）
+# --------------------------------------------------------------------------- #
+EVENTS_NAME = "events.json"
+EVENTS_API_VERSION = 1
+MAX_EVENTS_BYTES = 16 * 1024 * 1024
+
+# 事件表情的 7 个语义部位（与 docs/dsh-pets-character-pack-format-v3.md §expression 一致）。
+# 顺序即规范里的表格顺序；服务端独立重新校验，不信任前端。
+EXPRESSION_PART_KEYS = (
+    "左眼", "右眼", "眉毛_左", "眉毛_右", "眨眼_左", "眨眼_右", "嘴巴",
+)
+# 0.9.35：可选部位 —— 事件可以不写该键（缺省视为 null）。
+# 服务端独立校验，不信任前端：键必须落在「必填 + 可选」范围内，且必填键不能缺。
+EXPRESSION_PART_KEYS_OPTIONAL = ("嘴巴特效",)
+
+
+def _json_dump_crlf(obj):
+    """序列化并按仓库约定统一成 CRLF（零裸 LF）。
+
+    events.json 在仓库里是纯 CRLF（实测 976 CRLF / 0 裸 LF）；写成 LF 会让整文件
+    diff 全部翻红，看起来像改了上千行其实只改了一处。
+    """
+    return (json.dumps(obj, ensure_ascii=False, indent=2) + "\n").replace("\n", "\r\n")
+
+
+def _validate_event_expression(expr):
+    """校验一个事件的 expression（7 部位，眨眼组允许 iris/lash/white）。返回错误文案或 None。"""
+    if not isinstance(expr, dict):
+        return "expression 必须是对象"
+    allowed = set(EXPRESSION_PART_KEYS) | set(EXPRESSION_PART_KEYS_OPTIONAL)
+    unknown = [k for k in expr if k not in allowed]
+    if unknown:
+        return "expression 含未知部位：%s" % "、".join(sorted(unknown))
+    missing = [k for k in EXPRESSION_PART_KEYS if k not in expr]
+    if missing:
+        return "expression 缺部位：%s" % "、".join(missing)
+    # 可选部位：出现时必须是非空字符串或 null（与必填部位的取值约束一致）
+    for k in EXPRESSION_PART_KEYS_OPTIONAL:
+        if k in expr:
+            v = expr[k]
+            if v is not None and not isinstance(v, str):
+                return "%s 必须是字符串或 null" % k
+    for part in ("眨眼_左", "眨眼_右"):
+        val = expr.get(part)
+        if val is None:
+            continue
+        if not isinstance(val, dict):
+            return "%s 必须是对象或 null" % part
+        unknown_keys = [k for k in val if k not in ("iris", "lash", "white")]
+        if unknown_keys:
+            return "%s 含未知键：%s（只允许 iris / lash / white）" % (part, "、".join(sorted(unknown_keys)))
+        for k in ("iris", "lash", "white"):
+            if k in val and val[k] is not None and not isinstance(val[k], str):
+                return "%s.%s 必须是字符串或 null" % (part, k)
+    for part in ("左眼", "右眼", "眉毛_左", "眉毛_右", "嘴巴"):
+        val = expr.get(part)
+        if val is not None and not isinstance(val, str):
+            return "%s 必须是字符串或 null" % part
+    # 互斥：整眼非空时，同侧眨眼组必须为 null（v3 E5 规则）
+    if expr.get("左眼") is not None and expr.get("眨眼_左") is not None:
+        return "左眼（整眼）与 眨眼_左 不能同时非空"
+    if expr.get("右眼") is not None and expr.get("眨眼_右") is not None:
+        return "右眼（整眼）与 眨眼_右 不能同时非空"
+    # v3 不支持 wink：整眼必须两侧同时有或同时无
+    if expr.get("左眼") is not None and expr.get("右眼") is None:
+        return "单眼整眼（左非空右空）在 v3 不支持"
+    if expr.get("右眼") is not None and expr.get("左眼") is None:
+        return "单眼整眼（右非空左空）在 v3 不支持"
+    return None
+
+
+def perform_save_events(root, body):
+    """把 events.json 写回磁盘；返回 (changed, unchanged)。
+
+    请求形：{apiVersion, base, events, expressionByEvent:{id: expression}}
+
+    安全设计（与 bundle 保存同一套口径）：
+      · base 必须是仓库内相对路径，且只能是 <base>/events.json；
+      · 只改**请求里点名的事件**的 expression 字段，其余事件、category、lines、
+        presentation、schemaVersion 等一律原样保留 —— 目标清单之外一律不动；
+      · 写入前把「改后对象」与「磁盘原文」都做一次校验，任一失败即拒绝；
+      · 原子替换（同目录临时文件 + os.replace），失败回滚。
+    """
+    if not isinstance(body, dict):
+        raise invalid_request("请求正文必须是 JSON 对象")
+    if body.get("apiVersion") != EVENTS_API_VERSION or isinstance(body.get("apiVersion"), bool):
+        raise ApiError(400, "UNSUPPORTED_VERSION", "不支持的 API 版本；当前仅支持 %d" % EVENTS_API_VERSION)
+    allowed = {"apiVersion", "base", "events", "expressionByEvent"}
+    unknown = [k for k in body if k not in allowed]
+    if unknown:
+        raise invalid_request("请求含未知字段：%s" % "、".join(sorted(unknown)))
+
+    base_rel = body.get("base")
+    check_base(base_rel)
+    base_dir = root / base_rel
+    rel = body.get("events")
+    if rel != EVENTS_NAME:
+        raise invalid_request("events 必须是 %s（只允许写这一个文件）" % EVENTS_NAME)
+    target = base_dir / EVENTS_NAME
+    st = lstat_regular(target)
+    realpath_inside(root, base_dir, target)
+
+    patches = body.get("expressionByEvent")
+    if not isinstance(patches, dict) or not patches:
+        raise invalid_request("expressionByEvent 必须是非空对象（事件 id → expression）")
+    if len(patches) > 200:
+        raise invalid_request("一次最多修改 200 个事件")
+
+    try:
+        old_bytes = target.read_bytes()
+    except OSError as exc:
+        raise ApiError(500, "READ_FAILED", "读取 events.json 失败：%s" % (exc.strerror or exc))
+    try:
+        doc = json.loads(old_bytes.decode("utf-8-sig"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ApiError(409, "EVENTS_NOT_JSON", "磁盘上的 events.json 不是合法 JSON：%s" % exc)
+    if not isinstance(doc, dict) or not isinstance(doc.get("events"), list):
+        raise ApiError(409, "EVENTS_SHAPE", "磁盘上的 events.json 结构不符合预期（需要 {events:[...]}）")
+    if len(old_bytes) > MAX_EVENTS_BYTES:
+        raise ApiError(413, "EVENTS_TOO_LARGE", "events.json 超过 %d 字节" % MAX_EVENTS_BYTES)
+
+    by_id = {}
+    for ev in doc["events"]:
+        if isinstance(ev, dict) and isinstance(ev.get("id"), str):
+            by_id[ev["id"]] = ev
+
+    changed_ids = []
+    for event_id in sorted(patches):
+        if event_id not in by_id:
+            raise invalid_request("events.json 里没有事件 %s，拒绝创建新事件" % event_id)
+        expr = patches[event_id]
+        err = _validate_event_expression(expr)
+        if err:
+            raise invalid_request("%s：%s" % (event_id, err))
+        ev = by_id[event_id]
+        # 只替换 expression 一个字段；其余字段对象引用原样保留
+        if json.dumps(ev.get("expression"), sort_keys=True, ensure_ascii=False) != \
+           json.dumps(expr, sort_keys=True, ensure_ascii=False):
+            ev["expression"] = expr
+            changed_ids.append(event_id)
+
+    if not changed_ids:
+        return [], [EVENTS_NAME]
+
+    try:
+        new_bytes = _json_dump_crlf(doc).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise invalid_request("写入前序列化失败：%s" % exc)
+
+    # 回读自检：序列化后的内容必须仍是合法 JSON，且非目标事件逐字段未变
+    try:
+        reread = json.loads(new_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ApiError(500, "SERIALIZE_SELF_CHECK", "写入前自检失败（回读不是合法 JSON）：%s" % exc)
+    for ev in reread.get("events", []):
+        eid = ev.get("id") if isinstance(ev, dict) else None
+        if eid in changed_ids or eid is None:
+            continue
+        if json.dumps(ev, sort_keys=True, ensure_ascii=False) != \
+           json.dumps(by_id[eid], sort_keys=True, ensure_ascii=False):
+            raise ApiError(500, "SERIALIZE_SELF_CHECK", "写入前自检失败：事件 %s 被意外改动" % eid)
+
+    if new_bytes == old_bytes:
+        return [], [EVENTS_NAME]
+
+    tmp = None
+    try:
+        tmp = write_temp(base_dir, new_bytes, st.st_mode)
+        lstat_regular(target)
+        realpath_inside(root, base_dir, target)
+        os.replace(tmp, target)
+        tmp = None
+    except BaseException:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        # 回滚：用旧字节重建
+        try:
+            t2 = write_temp(base_dir, old_bytes, st.st_mode)
+            os.replace(t2, target)
+        except BaseException:
+            raise ApiError(
+                500,
+                "ROLLBACK_FAILED",
+                "写入失败且回滚失败，请手动检查 events.json",
+                extra={"changed": [EVENTS_NAME], "uncertain": [EVENTS_NAME]},
+            )
+        raise ApiError(500, "WRITE_FAILED", "写入失败，已恢复原文件；内存中的改动仍保留", extra={"changed": []})
+
+    return changed_ids, []
+
+
+# --------------------------------------------------------------------------- #
+# 本地项目扫描（只读；不碰 SAVE_LOCK / perform_save）
+# --------------------------------------------------------------------------- #
+PACKS_SUBDIR = "workspace/packs"
+PACK_ENTRY = "manifest.json"
+# 单个包的目录大小上限：超过就只统计到上限为止（避免扫到超大包把接口拖死）
+PACK_SIZE_BUDGET = 200 * 1024 * 1024
+
+
+def _safe_read_json(path):
+    """读一个 JSON 文件；失败返回 None（元信息缺失不应让整个列表失败）。"""
+    try:
+        with open(path, "rb") as fh:
+            return json.loads(fh.read().decode("utf-8-sig"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def _dir_stats(pack_dir):
+    """(文件数, 字节数)；有预算上限，超限后停止累加但仍继续计数文件。"""
+    count = 0
+    total = 0
+    budget_hit = False
+    for dirpath, _dirnames, filenames in os.walk(pack_dir):
+        for name in filenames:
+            count += 1
+            if budget_hit:
+                continue
+            try:
+                total += os.path.getsize(os.path.join(dirpath, name))
+            except OSError:
+                continue
+            if total > PACK_SIZE_BUDGET:
+                budget_hit = True
+    return count, total, budget_hit
+
+
+def _pack_meta(root, pack_dir):
+    """读一个包的 manifest + catalog，拼出展示用元信息；不支持/损坏也返回条目（带 issues）。"""
+    manifest = _safe_read_json(os.path.join(pack_dir, PACK_ENTRY))
+    rel = pack_dir.relative_to(root).as_posix()
+    issues = []
+    if not isinstance(manifest, dict):
+        return {
+            "path": rel,
+            "dirName": pack_dir.name,
+            "ok": False,
+            "issues": ["manifest.json 缺失或不是合法 JSON 对象"],
+        }
+
+    def label_of(display):
+        if isinstance(display, dict):
+            for key in ("zh", "en"):
+                val = display.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+        if isinstance(display, str) and display.strip():
+            return display.strip()
+        return None
+
+    label = label_of(manifest.get("displayName")) or manifest.get("characterName") or manifest.get("id")
+    issues_out = list(issues)
+
+    pack_format = manifest.get("packFormatVersion")
+    manifest_schema = manifest.get("manifestSchemaVersion")
+    # 与编辑器 bundle.js 同一套判定：packFormatVersion 必须 3、manifestSchemaVersion 必须 2
+    if pack_format != 3:
+        issues_out.append("packFormatVersion 不是 3，编辑器会按旧格式拒绝")
+    if manifest_schema != 2:
+        issues_out.append("manifestSchemaVersion 不是 2，编辑器会按旧格式拒绝")
+
+    anim_count = None
+    slot_count = None
+    generation = None
+    catalog_rel = manifest.get("catalog")
+    if isinstance(catalog_rel, str) and catalog_rel:
+        catalog = _safe_read_json(os.path.join(pack_dir, *catalog_rel.split("/")))
+        if isinstance(catalog, dict):
+            anns = catalog.get("animations")
+            anim_count = len(anns) if isinstance(anns, (list, dict)) else None
+            slots = catalog.get("slots")
+            slot_count = len(slots) if isinstance(slots, (list, dict)) else None
+            generation = catalog.get("generation")
+            stale = catalog.get("stale")
+            if isinstance(stale, list) and stale:
+                issues_out.append("catalog stale %d 条" % len(stale))
+            unresolved = catalog.get("unresolved")
+            if isinstance(unresolved, list) and unresolved:
+                issues_out.append("catalog unresolved %d 条" % len(unresolved))
+        else:
+            issues_out.append("catalog.json 读不到（动画/槽数未知）")
+
+    licenses = manifest.get("license")
+    credits = manifest.get("credits")
+    file_count, byte_total, budget_hit = _dir_stats(pack_dir)
+
+    return {
+        "path": rel,
+        "dirName": pack_dir.name,
+        "ok": True,
+        "entry": "manifest.json",
+        "id": manifest.get("id"),
+        "version": manifest.get("version"),
+        "label": label,
+        "packFormatVersion": pack_format,
+        "manifestSchemaVersion": manifest_schema,
+        "license": licenses,
+        "creditsCount": len(credits) if isinstance(credits, list) else 0,
+        "animCount": anim_count,
+        "slotCount": slot_count,
+        "catalogGeneration": generation,
+        "fileCount": file_count,
+        "bytes": byte_total,
+        "sizeBudgetHit": budget_hit,
+        "hasVoice": isinstance(manifest.get("voice"), dict) and bool(manifest["voice"].get("index")),
+        "hasSequences": isinstance(manifest.get("sequences"), dict) and bool(manifest["sequences"].get("index")),
+        "official": manifest.get("official") if isinstance(manifest.get("official"), bool) else None,
+        "issues": issues_out,
+    }
+
+
+def scan_packs(root):
+    """扫 workspace/packs 下的一层子目录；返回 (packs, scannedAtIso, rootRel)。
+
+    只扫一层：包根就是 workspace/packs/<name>/，不递归进包内部找 manifest，
+    以免把 fixtures 或包里的备份误当成独立项目。
+    """
+    packs_root = root / PACKS_SUBDIR
+    packs = []
+    if packs_root.is_dir():
+        try:
+            entries = sorted(packs_root.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            entries = []
+        for item in entries:
+            try:
+                if not item.is_dir():
+                    continue
+            except OSError:
+                continue
+            packs.append(_pack_meta(root, item))
+    return packs
+
+
+# --------------------------------------------------------------------------- #
 # 保存实现
 # --------------------------------------------------------------------------- #
 QUEUE_ORDER = "textures-atlas-model-index"
@@ -569,6 +908,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             super().log_message(fmt, *args)
 
     # -- 基础 ------------------------------------------------------------ #
+    def end_headers(self):
+        """静态资源也禁止缓存：本地工具边改边看，避免 HTML/JS/CSS 混用旧缓存。"""
+        buffered = b"".join(getattr(self, "_headers_buffer", []) or [])
+        if b"Cache-Control" not in buffered:
+            self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
     @property
     def root(self):
         return pathlib.Path(self.server.repo_root)
@@ -665,6 +1011,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 {"ok": False, "apiVersion": API_VERSION, "error": {"code": "METHOD_NOT_ALLOWED", "message": "保存只接受 POST"}},
             )
             return
+        if path == "/api/packs":
+            # 只读：扫描 workspace/packs 下的人物包，返回元信息（不进入保存链路）
+            try:
+                packs = scan_packs(self.root)
+            except Exception as err:  # noqa: BLE001 — 扫描失败不该 500 崩掉编辑器
+                self.send_json(
+                    200,
+                    {
+                        "ok": False,
+                        "apiVersion": API_VERSION,
+                        "root": PACKS_SUBDIR,
+                        "packs": [],
+                        "error": {"code": "SCAN_FAILED", "message": "扫描失败：%s" % (err,)},
+                    },
+                )
+                return
+            self.send_json(
+                200,
+                {
+                    "ok": True,
+                    "apiVersion": API_VERSION,
+                    "root": PACKS_SUBDIR,
+                    "packs": packs,
+                    "count": len(packs),
+                },
+            )
+            return
         if path != "/api/capabilities":
             self.send_json(404, {"ok": False, "apiVersion": API_VERSION, "error": {"code": "NOT_FOUND", "message": "未知 API 路径"}})
             return
@@ -673,14 +1046,72 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             {
                 "apiVersion": API_VERSION,
                 "saveBundle": self.write_enabled,
+                "saveEvents": self.write_enabled,
                 "maxBodyBytes": MAX_BODY_BYTES,
                 "externalModificationCheck": False,
             },
         )
 
+    # -- API: POST /api/save-events -------------------------------------- #
+    def handle_api_save_events(self):
+        """POST /api/save-events —— 只写 events.json 的 expression 字段。
+
+        与 /api/save-bundle 共用回环校验 / 写入锁 / 原子替换口径，但**独立端点**：
+        保存事件表不该要求调用方同时把所有模型贴图字节带上。
+        """
+        try:
+            host = self.request_host()
+            self.check_write_allowed(host)
+            length = self.check_length()
+        except ApiError as err:
+            self.fail(err)
+            return
+
+        if not SAVE_LOCK.acquire(blocking=False):
+            self.send_json(409, {"ok": False, "apiVersion": EVENTS_API_VERSION, "error": {"code": "SAVE_BUSY", "message": "正在保存，请稍后重试"}})
+            return
+        try:
+            raw = self.read_body(length)
+            try:
+                body = strict_json_loads(raw.decode("utf-8"))
+            except UnicodeDecodeError as exc:
+                raise invalid_request("正文不是合法 UTF-8（%s）" % exc.reason)
+            except ValueError as exc:
+                raise invalid_request("正文不是合法 JSON：%s" % exc)
+            changed, unchanged = perform_save_events(self.root, body)
+            self.send_json(
+                200,
+                {
+                    "ok": True,
+                    "apiVersion": EVENTS_API_VERSION,
+                    "base": body.get("base"),
+                    "changed": changed,
+                    "unchanged": unchanged,
+                    "message": ("已更新 %d 个事件的 expression" % len(changed)) if changed else "没有事件需要更新",
+                },
+            )
+        except ApiError as err:
+            self.fail(err)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except OSError as exc:
+            self.send_json(
+                500,
+                {
+                    "ok": False,
+                    "apiVersion": EVENTS_API_VERSION,
+                    "error": {"code": "WRITE_FAILED", "message": "写入 events.json 失败（%s）" % (exc.strerror or "IO 错误")},
+                },
+            )
+        finally:
+            SAVE_LOCK.release()
+
     # -- API: POST /api/save-bundle -------------------------------------- #
     def handle_api_post(self):
         path = self.path.split("?")[0]
+        if path == "/api/save-events":
+            self.handle_api_save_events()
+            return
         if path == "/api/capabilities":
             self.send_json(
                 405,
@@ -894,8 +1325,29 @@ def kill_pid(pid):
         pass
 
 
+def _script_self_identifies(arg):
+    """判断占用端口的进程是不是「本仓库这份 serve.py」。
+
+    绝对路径直接比对；**相对路径**也接受，但只接受与本脚本仓库相对路径完全一致的那种
+    （如 tools/character-editor/serve.py）。这是有意的窄口径：
+      · 我们不知道对方进程的 cwd，所以不能把任意相对路径当成自己；
+      · 但用相对路径启动旧实例是很常见的事（IDE / 手敲 / 别的启动脚本），
+        旧版一律判 False，于是旧实例不会被替换 → 端口被占 → 悄悄换端口 →
+        用户在另一个端口上看到「代码是新的、行为是旧的」的怪现象。
+      所以这里多认这一种确定形态，其余仍然拒绝。
+    """
+    if os.path.isabs(arg) and (os.name != "nt" or os.path.splitdrive(arg)[0]):
+        return os.path.normcase(os.path.realpath(arg)) == os.path.normcase(os.path.realpath(__file__))
+    rel = arg.replace("\\\\", "/").lstrip("./");
+    try:
+        me = os.path.relpath(os.path.realpath(__file__), os.path.realpath(repo_root()))
+    except (OSError, ValueError):
+        return False
+    return os.path.normcase(rel) == os.path.normcase(me.replace("\\", "/"))
+
+
 def command_runs_this_script(command):
-    """只认 Python 的绝对脚本参数；不猜测另一个进程的工作目录。"""
+    """只认 Python 的脚本参数；不猜测另一个进程的工作目录。"""
     try:
         args = shlex.split(command, posix=os.name != "nt")
     except ValueError:
@@ -926,9 +1378,7 @@ def command_runs_this_script(command):
         if index == len(args):
             return False
         arg = args[index]
-    if not os.path.isabs(arg) or (os.name == "nt" and not os.path.splitdrive(arg)[0]):
-        return False
-    return os.path.normcase(os.path.realpath(arg)) == os.path.normcase(os.path.realpath(__file__))
+    return _script_self_identifies(arg)
 
 
 def release_port(port, wait=8.0):

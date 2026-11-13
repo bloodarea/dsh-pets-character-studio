@@ -27,6 +27,9 @@ if not defined PY (
   exit /b 1
 )
 
+rem 传**绝对路径**（%~dp0 已含盘符与完整目录）：serve.py 判断「端口占用者是不是本仓库的
+rem 自己人」时会比对脚本参数；相对路径虽也已支持，绝对路径在两个方向上都更稳，
+rem 也便于在任务管理器里认出是哪个脚本。
 %PY% "%~dp0serve.py" %*
 if errorlevel 1 (
   echo.

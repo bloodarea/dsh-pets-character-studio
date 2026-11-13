@@ -1,4 +1,8 @@
 # Optional image/PSD tooling for local production; the plugin itself has no runtime dependency.
+# PSD/PSB part extraction: skills/psd-tools/ (tested with psd-tools 1.26.0).
+# The "composite" extra (aggdraw, scipy) is only needed for vector strokes,
+# gradient/pattern fills and layer effects; basic compositing works without it.
+psd-tools>=1.26,<2
 numpy>=1.24,<3
-Pillow>=10,<13
+Pillow>=10.3,<14
 scipy>=1.10,<2

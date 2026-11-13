@@ -9,8 +9,9 @@
  * 矩阵约定：Mat = {a,b,c,d,tx,ty}，x' = a*x + c*y + tx，y' = b*x + d*y + ty。
  *   （官方 spine-core 的 b/c 命名与本仓相反，比对官方数据时需交换 b/c。）
  *
- * 本期范围（A1）：region、mesh（刚性/加权）、一/二骨 IK 子集、linkedmesh、动画查看。
- * 不纳入求值：transform/path/physics 约束、clipping、sequence、deform 播放、槽位颜色动画、
+ * 本期范围（A1 + P2 形变）：region、mesh（刚性/加权）、一/二骨 IK 子集、linkedmesh、动画查看、
+ *   **deform 形变播放（linear/stepped/bezier，见 DeformTimeline）**。
+ * 不纳入求值：transform/path/physics 约束、clipping、sequence、槽位颜色动画、
  *   非 Normal/OnlyTranslation 的 inherit 模式。以上均检测并以 Issue 形式报告，不静默吞掉。
  */
 (function (global) {
@@ -1245,6 +1246,267 @@
     return order;
   }
 
+  /* ------------------------------------------------------------------ *
+   * 形变（deform）解析与求值
+   * ------------------------------------------------------------------ */
+
+  /**
+   * 官方 deformLength = weighted ? vertices.length/3*2 : vertices.length（SkeletonJson.ts:971）。
+   * 注意：weighted 时 `vertices` 是运行时权重数组（每个 influence 3 个数），所以 deform 是
+   * **每个 influence 2 个数**（Attachment.ts:128-137 的 `f += 2`），不是每个顶点 2 个。
+   */
+  function deformOffsetsLength(att) {
+    if (!att || !isFiniteNumber(att.vertexCount)) return 0;
+    if (!att.weighted) return att.vertexCount * 2;
+    var total = 0;
+    var infl = att.influences;
+    if (Array.isArray(infl)) {
+      for (var v = 0; v < infl.length; v++) total += (infl[v] && infl[v].length) || 0;
+    } else if (Array.isArray(att.bones) && Array.isArray(att.vertices)) {
+      total = att.vertices.length / 3;
+    }
+    return total * 2;
+  }
+
+  /**
+   * 解析一条 deform 轨道的 key 数组。
+   * 每 key：{time, offsets:Float64Array(offsetsLength), curve:'stepped'|Float64Array(4)|null}
+   * 依据官方 SkeletonJson.ts:975-1004：`vertices` 是**偏移**（未加权时官方再叠加 setup 顶点；
+   * 我们的 skinMesh 语义就是偏移，所以两种 mesh 都直接用 vertices 作为偏移）。
+   */
+  function parseDeformKeys(ctx, keysRaw, offsetsLength, path) {
+    var keys = [];
+    for (var ki = 0; ki < keysRaw.length; ki++) {
+      var raw = keysRaw[ki];
+      var kpath = path + "[" + ki + "]";
+      if (!isObject(raw)) {
+        warn(ctx, "animation.deform.key", kpath, "形变 key 必须是对象，已按零偏移处理");
+        keys.push({ time: 0, offsets: new Float64Array(offsetsLength), curve: null, invalid: true });
+        continue;
+      }
+      var time = raw.time === undefined ? 0 : raw.time;
+      if (!isFiniteNumber(time)) {
+        warn(ctx, "animation.deform.time", kpath + ".time", "时间必须是有限数，已按 0 处理");
+        time = 0;
+      }
+      var offsets = new Float64Array(offsetsLength);
+      var verts = raw.vertices;
+      if (verts !== undefined) {
+        if (!Array.isArray(verts)) {
+          warn(ctx, "animation.deform.vertices", kpath + ".vertices", "vertices 必须是数组");
+        } else {
+          var start = raw.offset === undefined ? 0 : raw.offset;
+          if (!Number.isInteger(start) || start < 0) {
+            warn(ctx, "animation.deform.offset", kpath + ".offset", "offset 必须是非负整数，已按 0 处理");
+            start = 0;
+          }
+          if (start + verts.length > offsetsLength) {
+            warn(ctx, "animation.deform.range", kpath, "vertices 超出形变长度 " + offsetsLength + "，超出部分已忽略");
+          }
+          for (var vi = 0; vi < verts.length; vi++) {
+            var v = verts[vi];
+            if (!isFiniteNumber(v)) {
+              warn(ctx, "animation.deform.value", kpath + ".vertices[" + vi + "]", "偏移必须是有限数，已按 0 处理");
+              continue;
+            }
+            if (start + vi < offsetsLength) offsets[start + vi] = v;
+          }
+        }
+      }
+      var curve = null;
+      if (raw.curve === "stepped") curve = "stepped";
+      else if (Array.isArray(raw.curve)) {
+        if (raw.curve.length < 4 || !isFiniteNumber(raw.curve[0]) || !isFiniteNumber(raw.curve[1]) || !isFiniteNumber(raw.curve[2]) || !isFiniteNumber(raw.curve[3])) {
+          warn(ctx, "animation.deform.curve", kpath + ".curve", "curve 需要 4 个有限数，已按 linear 处理");
+        } else {
+          curve = new Float64Array([raw.curve[0], raw.curve[1], raw.curve[2], raw.curve[3]]);
+        }
+      } else if (raw.curve !== undefined && raw.curve !== null) {
+        warn(ctx, "animation.deform.curve", kpath + ".curve", "curve 必须是 'stepped' 或 4 个数，已按 linear 处理");
+      }
+      keys.push({ time: time, offsets: offsets, curve: curve });
+    }
+    keys.sort(function (a, b) {
+      return a.time - b.time;
+    });
+    return keys;
+  }
+
+  /** 组装一条形变轨道；附件无法解析时返回 unresolved 轨道（保留 key，供 UI 只读显示） */
+  function buildDeformTrack(ctx, keysRaw, slotName, slotIndex, attName, model, path) {
+    if (!Array.isArray(keysRaw)) {
+      warn(ctx, "animation.deform.track", path, "形变轨道必须是数组");
+      return null;
+    }
+    var skin = model.defaultSkinName ? model.skins.get(model.defaultSkinName) : null;
+    var att = resolveAttachment(model, skin, slotIndex, attName);
+    var offsetsLength = deformOffsetsLength(att);
+    if (!att) {
+      warn(ctx, "animation.deform.unresolved", path, "找不到附件 " + slotName + "/" + attName + "，该形变轨道未求值（只读保留）");
+    }
+    var keys = parseDeformKeys(ctx, keysRaw, offsetsLength || 0, path);
+    return {
+      slotIndex: slotIndex,
+      slotName: slotName,
+      attachmentId: att ? att.id : slotName + "/" + attName,
+      attachmentName: attName,
+      weighted: !!(att && att.weighted),
+      vertexCount: att && isFiniteNumber(att.vertexCount) ? att.vertexCount : 0,
+      offsetsLength: offsetsLength || 0,
+      keys: keys,
+      unresolved: !att || !offsetsLength,
+      rawKeys: keysRaw,
+    };
+  }
+
+  /**
+   * 扫描一个动画里的形变轨道。
+   * 4.2：attachments.<skinName>.<slotName>.<attachmentName>.deform
+   * 旧式（3.x）：deform.<slotName>（附件取该槽的 setup 附件）
+   */
+  function parseDeformTracks(ctx, raw, path, model) {
+    var tracks = [];
+    if (raw.attachments !== undefined) {
+      var attRoot = readObject(ctx, raw, "attachments", path, true);
+      var skinNames = Object.keys(attRoot);
+      for (var si = 0; si < skinNames.length; si++) {
+        var skinName = skinNames[si];
+        var skinMap = attRoot[skinName];
+        if (!isObject(skinMap)) {
+          warn(ctx, "animation.deform.skin", path + ".attachments." + skinName, "skin 形变容器必须是对象");
+          continue;
+        }
+        var slotNames = Object.keys(skinMap);
+        for (var pi = 0; pi < slotNames.length; pi++) {
+          var slotName = slotNames[pi];
+          var slotIndex = model.slotIndex.get(slotName);
+          if (slotIndex === undefined) {
+            warn(ctx, "animation.deform.slot", path + ".attachments." + skinName + "." + slotName, "动画引用不存在的槽，已跳过");
+            continue;
+          }
+          var slotMap = skinMap[slotName];
+          if (!isObject(slotMap)) {
+            warn(ctx, "animation.deform.slotMap", path + ".attachments." + skinName + "." + slotName, "槽形变容器必须是对象");
+            continue;
+          }
+          var attNames = Object.keys(slotMap);
+          for (var ti = 0; ti < attNames.length; ti++) {
+            var attName = attNames[ti];
+            var bag = slotMap[attName];
+            var tpath = path + ".attachments." + skinName + "." + slotName + "." + attName;
+            if (!isObject(bag)) {
+              warn(ctx, "animation.deform.attachment", tpath, "附件形变容器必须是对象");
+              continue;
+            }
+            var unknown = Object.keys(bag).filter(function (f) {
+              return f !== "deform";
+            });
+            if (unknown.length) {
+              warn(ctx, "animation.deform.unknownField", tpath, "未知形变字段 " + unknown.join(",") + " 未求值（原样保留）");
+            }
+            if (bag.deform === undefined) continue;
+            var track = buildDeformTrack(ctx, bag.deform, slotName, slotIndex, attName, model, tpath + ".deform");
+            if (track) tracks.push(track);
+          }
+        }
+      }
+    }
+    if (raw.deform !== undefined) {
+      var legacy = raw.deform;
+      if (!isObject(legacy)) {
+        warn(ctx, "animation.deform.legacy", path + ".deform", "旧式 deform 必须是对象");
+      } else {
+        var legacySlots = Object.keys(legacy);
+        for (var li = 0; li < legacySlots.length; li++) {
+          var lSlotName = legacySlots[li];
+          var lSlotIndex = model.slotIndex.get(lSlotName);
+          if (lSlotIndex === undefined) {
+            warn(ctx, "animation.deform.slot", path + ".deform." + lSlotName, "旧式 deform 引用不存在的槽，已跳过");
+            continue;
+          }
+          var setupAtt = model.slots[lSlotIndex].setupAttachment;
+          var ltrack = buildDeformTrack(ctx, legacy[lSlotName], lSlotName, lSlotIndex, setupAtt, model, path + ".deform." + lSlotName);
+          if (ltrack) tracks.push(ltrack);
+        }
+      }
+    }
+    return tracks;
+  }
+
+  /**
+   * 形变专用贝塞尔百分比（官方 Animation.ts:1374-1394 setBezier + :1396-1420 getCurvePercent）。
+   * deform 的曲线 y 落在 0..1（端点固定 0→1），与 bone 轨道的 (time,value) 空间不同。
+   */
+  function deformBezierPercent(curve, t1, t2, time) {
+    var cx1 = curve[0];
+    var cy1 = curve[1];
+    var cx2 = curve[2];
+    var cy2 = curve[3];
+    var tmpx = (t1 - cx1 * 2 + cx2) * 0.03;
+    var tmpy = cy2 * 0.03 - cy1 * 0.06;
+    var dddx = ((cx1 - cx2) * 3 - t1 + t2) * 0.006;
+    var dddy = (cy1 - cy2 + 0.33333333) * 0.018;
+    var ddx = tmpx * 2 + dddx;
+    var ddy = tmpy * 2 + dddy;
+    var dx = (cx1 - t1) * 0.3 + tmpx + dddx * 0.16666667;
+    var dy = cy1 * 0.3 + tmpy + dddy * 0.16666667;
+    var x = t1 + dx;
+    var y = dy;
+    var xs = new Float64Array(BEZIER_SEGMENTS);
+    var ys = new Float64Array(BEZIER_SEGMENTS);
+    for (var i = 0; i < BEZIER_SEGMENTS; i++) {
+      xs[i] = x;
+      ys[i] = y;
+      dx += ddx;
+      dy += ddy;
+      ddx += dddx;
+      ddy += dddy;
+      x += dx;
+      y += dy;
+    }
+    if (xs[0] > time) return (ys[0] * (time - t1)) / (xs[0] - t1);
+    for (var j = 1; j < BEZIER_SEGMENTS; j++) {
+      if (xs[j] >= time) {
+        var px = xs[j - 1];
+        var py = ys[j - 1];
+        return py + ((time - px) / (xs[j] - px)) * (ys[j] - py);
+      }
+    }
+    var lx = xs[BEZIER_SEGMENTS - 1];
+    var ly = ys[BEZIER_SEGMENTS - 1];
+    return ly + ((1 - ly) * (time - lx)) / (t2 - lx);
+  }
+
+  /**
+   * 形变轨道求值。官方 Animation.ts:1436-1461（MixBlend.setup）。
+   * @returns {Float64Array|null} null = 零偏移（首 key 之前 / 无 key）
+   */
+  function sampleDeformAt(track, time) {
+    var keys = track.keys;
+    if (!keys || !keys.length || !track.offsetsLength) return null;
+    if (time < keys[0].time) return null;
+    var last = keys[keys.length - 1];
+    if (time >= last.time) return last.offsets; // 末 key 之后取末值
+    var idx = 0;
+    for (var i = 0; i < keys.length - 1; i++) {
+      if (time >= keys[i].time) idx = i;
+      if (time < keys[i + 1].time) break;
+    }
+    var a = keys[idx];
+    var b = keys[idx + 1];
+    var percent;
+    if (a.curve === "stepped") percent = 0;
+    else if (a.curve && a.curve.length >= 4) percent = deformBezierPercent(a.curve, a.time, b.time, time);
+    else {
+      var span = b.time - a.time;
+      percent = span <= EPS ? 1 : (time - a.time) / span;
+    }
+    var n = track.offsetsLength;
+    var out = new Float64Array(n);
+    for (var k = 0; k < n; k++) out[k] = a.offsets[k] + (b.offsets[k] - a.offsets[k]) * percent;
+    return out;
+  }
+
   function parseAnimation(ctx, raw, name, model) {
     var anim = {
       name: name,
@@ -1356,6 +1618,9 @@
       }
     }
 
+    /* 官方 4.2：`animations.<a>.ik.<约束名>` 是**一个合并 key 数组**（SkeletonJson.ts:748-787），
+       每个 key 同时含 {time, mix, softness, bendPositive, compress, stretch, curve?}；
+       这里按字段派生连续/阶梯轨道，供 applyIKTimeline 使用。 */
     if (raw.ik !== undefined) {
       var ikMap = readObject(ctx, raw, "ik", path, true);
       var ikNames = Object.keys(ikMap);
@@ -1415,13 +1680,17 @@
       anim.hasPhysics = true;
       warn(ctx, "animation.physics.unsupported", path + ".physics", "physics 约束动画未求值（部分预览）");
     }
-    if (raw.deform !== undefined) {
+    /* 形变（deform）：4.2 的 attachments.<skin>.<slot>.<att>.deform 与旧式 deform.<slot>。
+       官方 SkeletonJson.ts:968-1005 用 offset+vertices 组装长度为 deformLength 的偏移数组
+       （weighted = bones ? vertices.length/3*2 : vertices.length，即两种 mesh 都是 2×顶点数）。 */
+    var deformTracks = parseDeformTracks(ctx, raw, path, model);
+    if (deformTracks.length) {
       anim.hasDeform = true;
-      warn(ctx, "animation.deform.unsupported", path + ".deform", "旧式 deform 动画未求值（部分预览）");
-    }
-    if (raw.attachments !== undefined) {
-      anim.hasDeform = true;
-      warn(ctx, "animation.deform.unsupported", path + ".attachments", "形变动画未求值，按绑定网格预览（部分预览）");
+      anim.deform = deformTracks;
+      for (var dt = 0; dt < deformTracks.length; dt++) {
+        if (deformTracks[dt].unresolved) anim.deformUnresolved = (anim.deformUnresolved || 0) + 1;
+        anim.duration = Math.max(anim.duration, maxKeyTime(deformTracks[dt].keys));
+      }
     }
 
     if (raw.drawOrder !== undefined) {
@@ -1608,9 +1877,12 @@
         var animName = animNames[ai];
         var anim = parseAnimation(ctx, rawAnimations[animName], animName, model);
         model.animations.set(animName, anim);
-        if (anim.hasDeform) model.capabilities.unsupported.deform = true;
+        if (anim.hasDeform) {
+          /* 形变已求值（linear/stepped/bezier）；只有存在无法解析的形变轨道时才标记 unsupported */
+          if (anim.deformUnresolved) model.capabilities.unsupported.deform = true;
+        }
         if (anim.hasSlotColor) model.capabilities.unsupported.slotColor = true;
-        if (anim.drawOrder) model.capabilities.unsupported.drawOrder = true;
+        /* drawOrder 已求值（evalPose 的 sampleDrawOrder），不再标记 unsupported */
       }
     }
 
@@ -1909,6 +2181,20 @@
       }
     }
 
+    // 形变（deform）：按 slot + 当前附件匹配轨道（官方 DeformTimeline.apply 要求
+    // slotAttachment.timelineAttachment == timeline.attachment，Animation.ts:1427）。
+    var deform = new Array(model.slots.length);
+    if (anim && anim.deform && anim.deform.length) {
+      for (i = 0; i < anim.deform.length; i++) {
+        var dtrack = anim.deform[i];
+        if (dtrack.unresolved) continue;
+        var datt = attachments[dtrack.slotIndex];
+        if (!datt || datt.id !== dtrack.attachmentId) continue;
+        var offsets = sampleDeformAt(dtrack, time);
+        if (offsets) deform[dtrack.slotIndex] = offsets;
+      }
+    }
+
     // 绘制顺序。
     var drawOrder = new Array(model.slots.length);
     for (i = 0; i < drawOrder.length; i++) drawOrder[i] = i;
@@ -1954,7 +2240,7 @@
       if (result.issues.length) issues.push.apply(issues, result.issues);
     }
 
-    return { local: local, applied: applied, world: world, attachments: attachments, drawOrder: drawOrder, issues: issues };
+    return { local: local, applied: applied, world: world, attachments: attachments, drawOrder: drawOrder, deform: deform, issues: issues };
   }
 
   /* ------------------------------------------------------------------ *
@@ -2255,7 +2541,7 @@
           if (hidden.has(slotIndex) || hidden.has(slot.name) || hidden.has(att.id)) continue;
         }
       }
-      var worldXY = skinMesh(att, slot.boneIndex, pose.world);
+      var worldXY = skinMesh(att, slot.boneIndex, pose.world, pose.deform ? pose.deform[slotIndex] : null);
       var sourceXY = uvToPageXY(att.region, att.uv);
       var bounds = boundsOfArray(worldXY);
       if (!bounds) continue;
@@ -2454,6 +2740,8 @@
     evalPose: evalPose,
     ikSolve: ikSolve,
     skinMesh: skinMesh,
+    sampleDeformAt: sampleDeformAt,
+    deformOffsetsLength: deformOffsetsLength,
     uvToPageXY: uvToPageXY,
     buildGeometry: buildGeometry,
     weightColors: weightColors,

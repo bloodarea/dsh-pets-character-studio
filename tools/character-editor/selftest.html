@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>内置人物包管理器 · spine-core 自检</title>
+<title>内置人物包管理器 · 纯函数自检</title>
 <link rel="icon" href="data:,">
 <style>
   :root {
@@ -15,9 +15,13 @@
   * { box-sizing: border-box; }
   body { margin: 0; padding: 24px; background: var(--bg); color: var(--fg); font: 13px/1.5 var(--font-ui); }
   h1 { margin: 0 0 8px; font-size: 16px; }
-  #summary { margin: 0 0 16px; padding: 10px 12px; border-radius: 6px; font: 600 14px/1.4 var(--font-mono); border: 1px solid var(--line); background: var(--panel); }
+  #summary { margin: 0 0 10px; padding: 10px 12px; border-radius: 6px; font: 600 14px/1.4 var(--font-mono); border: 1px solid var(--line); background: var(--panel); }
   #summary.pass { color: var(--ok); border-color: #2f6b5b; }
   #summary.fail { color: var(--danger); border-color: #6b2f39; }
+  #aggregate { margin: 0 0 16px; padding: 8px 12px; border-radius: 6px; font: 600 13px/1.6 var(--font-mono); border: 1px dashed var(--line); color: var(--dim); }
+  #aggregate.pass { color: var(--ok); border-color: #2f6b5b; }
+  #aggregate.fail { color: var(--danger); border-color: #6b2f39; }
+  #aggregate .suite { margin-right: 12px; white-space: nowrap; }
   #results { max-width: 1100px; }
   #results p { color: var(--dim); }
   #results p.pass { color: var(--ok); }
@@ -28,14 +32,115 @@
 </style>
 </head>
 <body>
-<h1>内置人物包管理器 · spine-core 自检</h1>
-<p class="hint">纯函数断言：解析 / 蒙皮 / IK / 几何 / 权重 / 命中，以及 bundle.js 的索引校验 / 路径 / 补丁 / ZIP。期望值由官方 spine-core 4.2.120 计算。返回 <a href="index.html">内置人物包管理器</a></p>
+<h1>内置人物包管理器 · 纯函数自检</h1>
+<p class="hint">浏览器侧与 <code>node tools/character-editor/selftest-node.mjs</code> 跑同一批套件：core（解析 / 蒙皮 / IK / 几何 / 权重 / 命中）、bundle（索引校验 / 路径 / 补丁 / ZIP）、anim-edit（轨道扫描 / Key 增删改 / 重定时预检 / Graph 曲线写回）、slot-groups（显示顺序分组）、voice（语音事件索引）、<b>bone-edit</b>（gizmo / 坐标换算 / 骨骼拾取 / Local 坐标系 / Pose aim / 轴心补偿）、<b>track-edit</b>（事件 / 绘制顺序 / 形变 / ik / transform / path 轨道容器与 Key 规划，官方 4.2 结构）、<b>pose-tools</b>（镜像 / 片段库）、<b>ik-aim</b>（两骨 IK / 骨架结构操作）、<b>timeline</b>（Dopesheet 行、时间映射、过滤/锁定/隐藏、空轨补齐）、<b>curve-edit</b>（Spine 4.2 贝塞尔解析 / 采样 / 手柄编辑）、<b>batch-edit</b>（多选批量移动 / 粘贴 / 删除整批预检）、<b>keymap</b>（快捷键 chord 规范化 / 冲突 / 配置清洗）。<br>浏览器与 <code>selftest-node.mjs</code> 跑同一批套件；timeline / curve-edit 的「真实 rig 段」需要 Node 的文件系统，浏览器下整段跳过（数量见下方合计），Node 侧总数以该命令输出为准（不在页面里硬编码）。返回 <a href="index.html">内置人物包管理器</a></p>
 <p id="summary">RUNNING…</p>
+<p id="aggregate">AGGREGATE…</p>
 <div id="results"></div>
-<script src="spine-core.js"></script>
-<script src="bundle.js"></script>
-<script src="voice.js"></script>
-<script src="fixtures/cases.js"></script>
-<script src="selftest.js"></script>
+<script src="version.js?v=0.9.168"></script>
+<script src="spine-core.js?v=0.9.168"></script>
+<script src="bundle.js?v=0.9.168"></script>
+<script src="bone-edit.js?v=0.9.168"></script>
+<script src="track-edit.js?v=0.9.168"></script>
+<script src="pose-tools.js?v=0.9.168"></script>
+<script src="ik-aim.js?v=0.9.168"></script>
+<script src="timeline.js?v=0.9.168"></script>
+<script src="frame-timeline.js?v=0.9.168"></script>
+<script src="pose-compare.js?v=0.9.168"></script>
+<script src="key-inspector.js?v=0.9.168"></script>
+<script src="curve-presets.js?v=0.9.168"></script>
+<script src="deform-edit.js?v=0.9.168"></script>
+<script src="anim-markers.js?v=0.9.168"></script>
+<script src="frame-thumbs.js?v=0.9.168"></script>
+<script src="audio-wave.js?v=0.9.168"></script>
+<script src="curve-edit.js?v=0.9.168"></script>
+<script src="batch-edit.js?v=0.9.168"></script>
+<script src="keymap.js?v=0.9.168"></script>
+<script src="anim-edit.js?v=0.9.168"></script>
+<script src="slot-groups.js?v=0.9.168"></script>
+<script src="event-names.js?v=0.9.168"></script>
+<script src="voice.js?v=0.9.168"></script>
+<script src="fixtures/cases.js?v=0.9.168"></script>
+<script src="selftest.js?v=0.9.168"></script>
+<script src="selftest-anim.js?v=0.9.168"></script>
+<script src="selftest-slotgroups.js?v=0.9.168"></script>
+<script src="selftest-boneedit.js?v=0.9.168"></script>
+<script src="selftest-trackedit.js?v=0.9.168"></script>
+<script src="selftest-posetools.js?v=0.9.168"></script>
+<script src="selftest-ikaim.js?v=0.9.168"></script>
+<script src="selftest-timeline.js?v=0.9.168"></script>
+<script src="selftest-frametimeline.js?v=0.9.168"></script>
+<script src="selftest-posecompare.js?v=0.9.168"></script>
+<script src="selftest-keyinspector.js?v=0.9.168"></script>
+<script src="selftest-curvepresets.js?v=0.9.168"></script>
+<script src="selftest-deformedit.js?v=0.9.168"></script>
+<script src="selftest-animmarkers.js?v=0.9.168"></script>
+<script src="selftest-framethumbs.js?v=0.9.168"></script>
+<script src="selftest-audiowave.js?v=0.9.168"></script>
+<script src="selftest-curveedit.js?v=0.9.168"></script>
+<script src="selftest-batchedit.js?v=0.9.168"></script>
+<script src="selftest-keymap.js?v=0.9.168"></script>
+<script src="selftest-eventnames.js?v=0.9.168"></script>
+<script>
+/* 汇总与 Node 聚合入口同口径（core/anim/slot-groups/bone-edit/track-edit/pose-tools/ik-aim/timeline/frame-timeline/curve-edit/batch-edit/keymap/event-names） */
+(function () {
+  function fill() {
+    var suites = [
+      ["core", window.__selftestResult],
+      ["anim", window.__selftestAnimResult],
+      ["slot-groups", window.__selftestSlotGroupsResult],
+      ["bone-edit", window.__selftestBoneEditResult],
+      ["track-edit", window.__selftestTrackEditResult],
+      ["pose-tools", window.__selftestPoseToolsResult],
+      ["ik-aim", window.__selftestIkAimResult],
+      ["timeline", window.__selftestTimelineResult],
+      ["frame-timeline", window.__selftestFrameTimelineResult],
+      ["pose-compare", window.__selftestPoseCompareResult],
+      ["key-inspector", window.__selftestKeyInspectorResult],
+      ["curve-presets", window.__selftestCurvePresetsResult],
+      ["deform-edit", window.__selftestDeformEditResult],
+      ["anim-markers", window.__selftestAnimMarkersResult],
+      ["frame-thumbs", window.__selftestFrameThumbsResult],
+      ["audio-wave", window.__selftestAudioWaveResult],
+      ["curve-edit", window.__selftestCurveEditResult],
+      ["batch-edit", window.__selftestBatchEditResult],
+      ["keymap", window.__selftestKeymapResult],
+      ["event-names", window.__selftestEventNamesResult],
+    ];
+    var total = 0, passed = 0, failed = 0, skipped = 0, missing = [];
+    var parts = [];
+    for (var i = 0; i < suites.length; i++) {
+      var name = suites[i][0];
+      var s = suites[i][1];
+      if (!s) {
+        missing.push(name);
+        parts.push('<span class="suite">' + name + ' 未加载</span>');
+        continue;
+      }
+      total += s.total || 0;
+      passed += s.passed || 0;
+      failed += s.failed || 0;
+      skipped += s.skipped || 0;
+      parts.push('<span class="suite">' + name + " " + (s.passed || 0) + "/" + (s.total || 0) + "</span>");
+    }
+    var box = document.getElementById("aggregate");
+    if (!box) return;
+    var okAll = failed === 0 && missing.length === 0;
+    box.className = okAll ? "pass" : "fail";
+    box.innerHTML =
+      "<b>浏览器合计 " + passed + "/" + total + " 通过，" + failed + " 失败</b>" +
+      (skipped ? "（跳过 " + skipped + " 个需 Node 的用例）" : "") +
+      " · " + parts.join("") +
+      (missing.length ? "（缺少套件：" + missing.join("、") + "）" : "") +
+      '<br><span class="suite">Node 聚合入口：<code>node tools/character-editor/selftest-node.mjs</code>（含 timeline / curve-edit 真实 rig 段；总数以该命令输出为准）</span>';
+    window.__selftestAggregate = { passed: passed, failed: failed, total: total, skipped: skipped, missing: missing };
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", function () { setTimeout(fill, 0); });
+  } else {
+    setTimeout(fill, 0);
+  }
+})();
+</script>
 </body>
 </html>

@@ -159,6 +159,87 @@
    * ====================================================================== */
   const INDEX_FIELDS = { schemaVersion: 1, base: 1, label: 1, files: 1 };
   const FILE_FIELDS = { model: 1, atlas: 1, textures: 1 };
+  /* v3：spine/index.json schemaVersion 2 追加的文件槽位（§5.2） */
+  const FILE_FIELDS_V2 = { model: 1, atlas: 1, textures: 1, rigMeta: 1, idleProfile: 1, lipsync: 1 };
+  const SUPPORTED_SCHEMA_VERSIONS = [1, 2];
+
+  /* ===== v3.2：manifest.json 是包根唯一入口，spine/index.json 已废除 ===== */
+  const MANIFEST_SCHEMA_VERSION = 2;
+  /** 入口文件 basename 白名单（其他 .json 一律拒绝，含 model.json） */
+  const ENTRY_NAMES = ["manifest.json", "index.json"];
+  const MANIFEST_NAME = "manifest.json";
+  const INDEX_NAME = "index.json";        // 旧版入口名（buildLocalTree 需要）
+  /** manifest.spine 的路径槽位（六项平铺） */
+  const SPINE_FIELDS = { model: 1, atlas: 1, textures: 1, rigMeta: 1, idleProfile: 1, lipsync: 1 };
+  /** v3.2 必填的 manifest 字段 */
+  const MANIFEST_REQUIRED = [
+    "packFormatVersion", "manifestSchemaVersion", "id", "version",
+    "displayName", "render", "spine", "catalog", "events", "license", "credits",
+  ];
+  const OLD_FORMAT_CODE = "OLD_FORMAT_PACK";
+  const OLD_FORMAT_MSG =
+    "该包为旧格式（v3.1 及更早）：spine/index.json 已废除，本版只认包根 manifest.json；" +
+    "请用 compile_pack.py 重新编译";
+
+  /* ==========================================================================
+   * 2.1 「载入路径」入参规范化（纯函数，Node 可测；app.js 只负责读输入框）
+   * ====================================================================== */
+
+  /**
+   * 把用户输入的路径规范成「可交给 loadIndexByPath 的入口路径」。
+   *
+   * 接受： workspace/packs/deepseek
+   *        workspace/packs/deepseek/
+   *        workspace/packs/deepseek/manifest.json
+   *        workspace/packs/deepseek/index.json（旧包）
+   *        ?index=workspace/packs/deepseek（带参数前缀，剥掉）
+   *        整条 URL 里含 ?index=（剥掉查询串）
+   * 拒绝： 空、以 / 开头、反斜杠、含 ..、file: 本地地址、其它带协议的地址、非入口的 .json
+   *
+   * @param {string} raw 用户原始输入
+   * @returns {{ok:true, value:string} | {ok:false, reason:string}}
+   */
+  function normalizePackPath(raw) {
+    let s = String(raw == null ? "" : raw).trim();
+    if (!s) return { ok: false, reason: "请输入仓库相对路径" };
+    /* 允许直接粘整条 URL 的 ?index= 部分 */
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(s) || s.startsWith("//")) {
+      const m = /[?&]index=([^&#]+)/.exec(s);
+      if (m) s = decodeURIComponent(m[1]);
+      else if (/^file:/i.test(s)) {
+        return { ok: false, reason: "这是本地文件地址，无法由服务端读取；请使用「选包目录」" };
+      } else return { ok: false, reason: "只支持仓库相对路径，不接受带协议的地址" };
+    }
+    if (s.startsWith("/")) return { ok: false, reason: "不能以 / 开头（那是站点根，不是仓库相对路径）" };
+    if (s.indexOf("\\") >= 0) return { ok: false, reason: "请用正斜杠 / ，不要用反斜杠 \\" };
+    if (s.indexOf("..") >= 0) return { ok: false, reason: "路径不能包含 .." };
+    if (s.indexOf("//") >= 0) s = s.replace(/\/+/g, "/");
+    s = s.replace(/[?#].*$/, "");
+    s = s.replace(/^\.\//, "");
+    /* 去尾斜杠 */
+    s = s.replace(/\/+$/, "");
+    if (!s) return { ok: false, reason: "请输入仓库相对路径" };
+    const base = s.replace(/\/+$/, "").split("/").pop();
+    if (base === MANIFEST_NAME || base === INDEX_NAME) return { ok: true, value: s };
+    if (base.endsWith(".json")) {
+      return { ok: false, reason: "只接受 manifest.json（v3.2）或 index.json（旧）作为入口文件" };
+    }
+    /* 目录 → 默认 v3.2 的 manifest.json */
+    return { ok: true, value: s + "/" + MANIFEST_NAME };
+  }
+
+  /** 形态探测：manifest 入口 */
+  function looksLikeManifest(o) {
+    if (!isPlainObject(o)) return false;
+    return "manifestSchemaVersion" in o || "packFormatVersion" in o ||
+      ("spine" in o && "render" in o && !("files" in o));
+  }
+
+  /** 形态探测：旧版 spine/index.json（schemaVersion + files） */
+  function looksLikeLegacyIndex(o) {
+    if (!isPlainObject(o)) return false;
+    return "schemaVersion" in o && "files" in o;
+  }
 
   /**
    * @param {object} input 解析后的索引对象
@@ -175,22 +256,40 @@
       if (!INDEX_FIELDS[k]) issues.push(issue(k, "UNKNOWN_FIELD", "索引包含未知字段：" + k));
     }
 
-    /* schemaVersion：严格整数 1 */
+    /* schemaVersion：严格整数，支持 1（旧）与 2（v3 包） */
+    let schemaVersion = null;
     if (!("schemaVersion" in input)) {
       issues.push(issue("schemaVersion", "MISSING_FIELD", "索引缺少 schemaVersion"));
-    } else if (typeof input.schemaVersion !== "number" || !Number.isInteger(input.schemaVersion) || input.schemaVersion !== SCHEMA_VERSION) {
+    } else if (
+      typeof input.schemaVersion !== "number" ||
+      !Number.isInteger(input.schemaVersion) ||
+      SUPPORTED_SCHEMA_VERSIONS.indexOf(input.schemaVersion) < 0
+    ) {
       issues.push(
         issue(
           "schemaVersion",
           "BAD_VERSION",
-          "不支持的索引版本：" + show(input.schemaVersion) + "；当前仅支持 schemaVersion=" + SCHEMA_VERSION
+          "不支持的索引版本：" + show(input.schemaVersion) +
+            "；当前支持 schemaVersion=" + SUPPORTED_SCHEMA_VERSIONS.join(" / ")
         )
       );
+    } else {
+      schemaVersion = input.schemaVersion;
     }
+    const isV3 = schemaVersion === 2;
 
-    /* base：picker 必填，URL 可省略 */
+    /* base：
+       - schemaVersion 2（v3）：**禁止出现**，包根由加载器从 index.json 的 URL 反推（§5.2）
+       - schemaVersion 1（旧）：picker 必填，URL 可省略 */
     let base = null;
-    if (!("base" in input) || input.base === undefined || input.base === null) {
+    const hasBase = "base" in input && input.base !== undefined && input.base !== null;
+    if (isV3) {
+      if (hasBase) {
+        issues.push(
+          issue("base", "UNEXPECTED_BASE", "schemaVersion 2 的索引不得再声明 base（v3 路径相对包根）")
+        );
+      }
+    } else if (!hasBase) {
       if (requireBase) {
         issues.push(
           issue(
@@ -221,27 +320,52 @@
       issues.push(issue("files", "MISSING_FIELD", "索引缺少 files 对象"));
     } else {
       const f = input.files;
+      const allowedFiles = isV3 ? FILE_FIELDS_V2 : FILE_FIELDS;
       for (const k of Object.keys(f)) {
-        if (!FILE_FIELDS[k]) issues.push(issue("files." + k, "UNKNOWN_FIELD", "files 包含未知字段：" + k));
+        if (!allowedFiles[k]) issues.push(issue("files." + k, "UNKNOWN_FIELD", "files 包含未知字段：" + k));
       }
 
       const model = f.model;
       const atlas = f.atlas;
       const textures = f.textures;
 
-      if (typeof model !== "string") {
-        issues.push(issue("files.model", "MISSING_FIELD", "索引缺少 files.model（模型 JSON 文件名）"));
-      } else {
-        const bad = filenameIssue(model, "files.model") || extensionIssue(model, ".json", "files.model", "模型文件名");
-        if (bad) issues.push(bad);
-        else if (model === "index.json") issues.push(issue("files.model", "INVALID_NAME", "files.model 不能是 index.json"));
+      /* v3（schemaVersion 2）：files 值是**包根相对路径**（可含 /），用路径校验；
+         旧版（schemaVersion 1）：files 值是裸文件名。 */
+      function relPathIssue(rel, path, ext, label) {
+        if (typeof rel !== "string" || !rel) {
+          return issue(path, "MISSING_FIELD", "索引缺少 " + path + "（" + label + "）");
+        }
+        if (rel.indexOf("\\") >= 0) return issue(path, "INVALID_PATH", path + " 不能含反斜杠：" + rel);
+        if (rel.charAt(0) === "/" || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(rel)) {
+          return issue(path, "INVALID_PATH", path + " 必须是包根相对路径：" + rel);
+        }
+        if (rel.indexOf("..") >= 0) return issue(path, "INVALID_PATH", path + " 不能含 ..：" + rel);
+        if (ext && !rel.toLowerCase().endsWith(ext)) {
+          return issue(path, "INVALID_EXT", path + " 扩展名应为 " + ext + "：" + rel);
+        }
+        return null;
       }
 
-      if (typeof atlas !== "string") {
-        issues.push(issue("files.atlas", "MISSING_FIELD", "索引缺少 files.atlas（图集文件名）"));
+      if (isV3) {
+        const badModel = relPathIssue(model, "files.model", ".json", "模型路径");
+        if (badModel) issues.push(badModel);
+        const badAtlas = relPathIssue(atlas, "files.atlas", ".atlas", "图集路径");
+        if (badAtlas) issues.push(badAtlas);
       } else {
-        const bad = filenameIssue(atlas, "files.atlas") || extensionIssue(atlas, ".atlas", "files.atlas", "图集文件名");
-        if (bad) issues.push(bad);
+        if (typeof model !== "string") {
+          issues.push(issue("files.model", "MISSING_FIELD", "索引缺少 files.model（模型 JSON 文件名）"));
+        } else {
+          const bad = filenameIssue(model, "files.model") || extensionIssue(model, ".json", "files.model", "模型文件名");
+          if (bad) issues.push(bad);
+          else if (model === "index.json") issues.push(issue("files.model", "INVALID_NAME", "files.model 不能是 index.json"));
+        }
+
+        if (typeof atlas !== "string") {
+          issues.push(issue("files.atlas", "MISSING_FIELD", "索引缺少 files.atlas（图集文件名）"));
+        } else {
+          const bad = filenameIssue(atlas, "files.atlas") || extensionIssue(atlas, ".atlas", "files.atlas", "图集文件名");
+          if (bad) issues.push(bad);
+        }
       }
 
       let texOut = null;
@@ -256,11 +380,20 @@
         const seen = Object.create(null);
         for (let i = 0; i < textures.length; i++) {
           const t = textures[i];
-          const bad =
-            filenameIssue(t, "files.textures[" + i + "]") ||
-            (typeof t === "string" && !t.endsWith(".png") && !t.endsWith(".webp")
-              ? issue("files.textures[" + i + "]", "INVALID_EXT", "贴图必须是 .png 或 .webp（小写扩展名）：" + t)
-              : null);
+          const texPath = "files.textures[" + i + "]";
+          let bad;
+          if (isV3) {
+            bad = relPathIssue(t, texPath, null, "贴图路径");
+            if (!bad && typeof t === "string" && !t.toLowerCase().endsWith(".png") && !t.toLowerCase().endsWith(".webp")) {
+              bad = issue(texPath, "INVALID_EXT", "贴图必须是 .png 或 .webp（小写扩展名）：" + t);
+            }
+          } else {
+            bad =
+              filenameIssue(t, texPath) ||
+              (typeof t === "string" && !t.endsWith(".png") && !t.endsWith(".webp")
+                ? issue(texPath, "INVALID_EXT", "贴图必须是 .png 或 .webp（小写扩展名）：" + t)
+                : null);
+          }
           if (bad) {
             issues.push(bad);
             continue;
@@ -288,14 +421,217 @@
 
       if (typeof model === "string" && typeof atlas === "string" && texOut) {
         files = { model: model, atlas: atlas, textures: texOut.slice() };
+        /* v3：把 rigMeta / idleProfile / lipsync 一并带出，供加载器定位 */
+        if (isV3) {
+          for (const extra of ["rigMeta", "idleProfile", "lipsync"]) {
+            if (typeof f[extra] === "string" && f[extra]) files[extra] = f[extra];
+          }
+        }
       }
     }
 
     if (issues.length) return issuesResult(issues);
-    const value = { schemaVersion: SCHEMA_VERSION };
+    /* 关键：输出**实际校验通过**的 schemaVersion，不能用常量 SCHEMA_VERSION（那恒为 1），
+       否则下游 resolveIndexLocation 的 v3 分支永远进不去。 */
+    const value = { schemaVersion: schemaVersion == null ? SCHEMA_VERSION : schemaVersion };
     if (base) value.base = base;
     if (label) value.label = label;
     value.files = files;
+    return success(value);
+  }
+
+  /**
+   * v3.2 manifest.json 校验（包根唯一入口）。
+   *
+   * 归一化输出与 validateIndex 同形（含 `files` 投影），因此下游
+   * loadIndexEntry / validateTexturePages 几乎不用改；`spine` 原样保留，
+   * 需要读 manifest.spine.* 的调用方也能拿到。
+   */
+  function validateManifest(input, opts) {
+    const o = opts || {};
+    const issues = [];
+    if (!isPlainObject(input)) return failure("NOT_OBJECT", "manifest 内容必须是 JSON 对象", "");
+
+    /* 版本：packFormatVersion === 3 且 manifestSchemaVersion === 2 */
+    if (input.packFormatVersion !== 3) {
+      const v = input.packFormatVersion;
+      return failure(
+        typeof v === "number" && v < 3 ? OLD_FORMAT_CODE : "BAD_PACK_FORMAT_VERSION",
+        typeof v === "number" && v < 3
+          ? OLD_FORMAT_MSG
+          : "packFormatVersion 必须是 3，实际 " + show(v),
+        "packFormatVersion"
+      );
+    }
+    if (input.manifestSchemaVersion !== MANIFEST_SCHEMA_VERSION) {
+      const v = input.manifestSchemaVersion;
+      return failure(
+        typeof v === "number" && v < MANIFEST_SCHEMA_VERSION ? OLD_FORMAT_CODE : "BAD_MANIFEST_SCHEMA_VERSION",
+        typeof v === "number" && v < MANIFEST_SCHEMA_VERSION
+          ? OLD_FORMAT_MSG
+          : "manifestSchemaVersion 必须是 " + MANIFEST_SCHEMA_VERSION + "，实际 " + show(v),
+        "manifestSchemaVersion"
+      );
+    }
+
+    /* 必填字段存在性 */
+    for (const f of MANIFEST_REQUIRED) {
+      if (!(f in input) || input[f] === undefined || input[f] === null) {
+        issues.push(issue(f, "MISSING_FIELD", "manifest 缺 " + f));
+      }
+    }
+
+    /* id / version */
+    if (typeof input.id !== "string" || !BASENAME_RE.test(input.id)) {
+      issues.push(issue("id", "INVALID_ID", "manifest.id 必须是非空标识符：" + show(input.id)));
+    }
+    if (typeof input.version !== "string" || !/^\d+\.\d+\.\d+/.test(input.version)) {
+      issues.push(issue("version", "INVALID_VERSION", "manifest.version 必须是 SemVer：" + show(input.version)));
+    }
+
+    /* displayName：{en, zh} 至少一个非空 */
+    let label = null;
+    const dn = input.displayName;
+    if (!isPlainObject(dn)) {
+      issues.push(issue("displayName", "INVALID_DISPLAY_NAME", "displayName 必须是对象 {en, zh}"));
+    } else {
+      const zh = typeof dn.zh === "string" ? dn.zh.trim() : "";
+      const en = typeof dn.en === "string" ? dn.en.trim() : "";
+      if (!zh && !en) issues.push(issue("displayName", "INVALID_DISPLAY_NAME", "displayName 的 en / zh 至少一个非空"));
+      else label = zh || en;
+    }
+
+    /* 包根相对路径文法（无绝对 / .. / 反斜杠 / 盘符） */
+    function relPath(v, path, ext, required) {
+      if (v === undefined || v === null) {
+        if (required) issues.push(issue(path, "MISSING_FIELD", "manifest 缺 " + path));
+        return null;
+      }
+      if (typeof v !== "string" || !v) {
+        issues.push(issue(path, "INVALID_PATH", path + " 必须是非空字符串"));
+        return null;
+      }
+      if (v.indexOf("\\") >= 0) issues.push(issue(path, "INVALID_PATH", path + " 不能含反斜杠：" + v));
+      else if (v.charAt(0) === "/" || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(v)) {
+        issues.push(issue(path, "INVALID_PATH", path + " 必须是包根相对路径：" + v));
+      } else if (v.split("/").indexOf("..") >= 0) {
+        issues.push(issue(path, "INVALID_PATH", path + " 不能含 .. 段：" + v));
+      } else if (ext && !v.toLowerCase().endsWith(ext)) {
+        issues.push(issue(path, "INVALID_EXT", path + " 扩展名应为 " + ext + "：" + v));
+      }
+      return v;
+    }
+
+    /* render */
+    let renderEntry = null;
+    if (!isPlainObject(input.render)) {
+      issues.push(issue("render", "INVALID_RENDER", "render 必须是对象"));
+    } else {
+      const r = input.render;
+      if (r.type !== "spine") issues.push(issue("render.type", "INVALID_RENDER_TYPE", "render.type 必须是 spine：" + show(r.type)));
+      renderEntry = relPath(r.entry, "render.entry", ".json", true);
+      if (typeof r.scale !== "number" || !Number.isFinite(r.scale)) {
+        issues.push(issue("render.scale", "INVALID_SCALE", "render.scale 必须是数字"));
+      }
+      if (!Array.isArray(r.anchor) || r.anchor.length !== 2 ||
+          !r.anchor.every((n) => typeof n === "number" && Number.isFinite(n))) {
+        issues.push(issue("render.anchor", "INVALID_ANCHOR", "render.anchor 必须是两个数字的数组"));
+      }
+    }
+
+    /* spine：六项平铺 */
+    const spine = {};
+    if (!isPlainObject(input.spine)) {
+      issues.push(issue("spine", "INVALID_SPINE", "spine 必须是对象"));
+    } else {
+      for (const k of Object.keys(input.spine)) {
+        if (!SPINE_FIELDS[k]) issues.push(issue("spine." + k, "UNKNOWN_FIELD", "spine 包含未知字段：" + k));
+      }
+      spine.model = relPath(input.spine.model, "spine.model", ".json", true);
+      spine.atlas = relPath(input.spine.atlas, "spine.atlas", ".atlas", true);
+      spine.rigMeta = relPath(input.spine.rigMeta, "spine.rigMeta", ".json", true);
+      spine.idleProfile = relPath(input.spine.idleProfile, "spine.idleProfile", ".json", true);
+      spine.lipsync = relPath(input.spine.lipsync, "spine.lipsync", ".json", false);
+
+      const tex = input.spine.textures;
+      if (!Array.isArray(tex) || tex.length < 1 || tex.length > LIMITS.maxTextures) {
+        issues.push(issue("spine.textures", "INVALID_TEXTURES",
+          "spine.textures 数量必须在 1.." + LIMITS.maxTextures + " 之间"));
+      } else {
+        const out = [];
+        const seen = Object.create(null);
+        for (let i = 0; i < tex.length; i++) {
+          const t = tex[i];
+          const tp = "spine.textures[" + i + "]";
+          const v = relPath(t, tp, null, true);
+          if (typeof t === "string" && !t.toLowerCase().endsWith(".png") && !t.toLowerCase().endsWith(".webp")) {
+            issues.push(issue(tp, "INVALID_EXT", "贴图必须是 .png 或 .webp（小写扩展名）：" + t));
+            continue;
+          }
+          if (typeof t === "string") {
+            const key = t.toLowerCase();
+            if (seen[key]) issues.push(issue(tp, "DUPLICATE_NAME", "贴图路径重复（不区分大小写）：" + t));
+            seen[key] = true;
+          }
+          if (v) out.push(v);
+        }
+        spine.textures = out;
+      }
+    }
+
+    /* render.entry 必须等于 spine.model */
+    if (renderEntry && spine.model && renderEntry !== spine.model) {
+      issues.push(issue("render.entry", "ENTRY_MISMATCH",
+        "render.entry 必须等于 spine.model：render.entry=" + renderEntry + "，spine.model=" + spine.model));
+    }
+
+    /* catalog / events */
+    const catalog = relPath(input.catalog, "catalog", ".json", true);
+    const events = relPath(input.events, "events", ".json", true);
+
+    /* license / credits */
+    if (typeof input.license !== "string" || !input.license.trim()) {
+      issues.push(issue("license", "INVALID_LICENSE", "license 必须是非空 SPDX 字符串"));
+    }
+    if (!Array.isArray(input.credits) || !input.credits.length) {
+      issues.push(issue("credits", "INVALID_CREDITS", "credits 必须是非空数组"));
+    }
+
+    /* 可选：voice / sequences */
+    let voice = null;
+    if (isPlainObject(input.voice) && input.voice.index != null) {
+      voice = { index: relPath(input.voice.index, "voice.index", ".json", true) };
+    }
+    let sequences = null;
+    if (isPlainObject(input.sequences) && input.sequences.index != null) {
+      sequences = { index: relPath(input.sequences.index, "sequences.index", ".json", true) };
+    }
+
+    if (issues.length) return issuesResult(issues);
+
+    const value = {
+      entryKind: "manifest",
+      schemaVersion: 2,                    // 语义同 v3：包根相对；供 spineDir()/packRootDir() 判断
+      manifestSchemaVersion: MANIFEST_SCHEMA_VERSION,
+      id: input.id,
+      version: input.version,
+      label: label || input.id,
+      spine: spine,
+      files: {                             // 与 validateIndex 同形的投影，下游免改
+        model: spine.model,
+        atlas: spine.atlas,
+        textures: (spine.textures || []).slice(),
+      },
+      catalog: catalog,
+      events: events,
+    };
+    if (spine.rigMeta) value.files.rigMeta = spine.rigMeta;
+    if (spine.idleProfile) value.files.idleProfile = spine.idleProfile;
+    if (spine.lipsync) value.files.lipsync = spine.lipsync;
+    if (voice) value.voice = voice;
+    if (sequences) value.sequences = sequences;
+    if (typeof input.label === "string" && input.label) value.label = input.label;
+    value.manifest = input;                // 原始 manifest，供需要额外字段的调用方
     return success(value);
   }
 
@@ -309,8 +645,13 @@
     try {
       parsed = JSON.parse(text);
     } catch (e) {
-      return failure("INVALID_JSON", "索引不是合法 JSON：" + (e && e.message ? e.message : String(e)), "");
+      return failure("INVALID_JSON", "入口文件不是合法 JSON：" + (e && e.message ? e.message : String(e)), "");
     }
+    /* v3.2：先探测 manifest.json 形态 */
+    if (looksLikeManifest(parsed)) return validateManifest(parsed, opts);
+    /* 旧版 spine/index.json 形态：明确报「旧格式」，不当普通错误吞掉 */
+    if (looksLikeLegacyIndex(parsed)) return failure(OLD_FORMAT_CODE, OLD_FORMAT_MSG, "");
+    /* 都不是：交给旧校验器给出具体字段错误（保持既有行为，便于定位） */
     return validateIndex(parsed, opts);
   }
 
@@ -320,7 +661,54 @@
    * @param {string|null} observedBase URL 目录（?index= 时给出），picker 传 null
    */
   function resolveIndexLocation(index, observedBase) {
+    /* v3.2 manifest 入口：manifest.json 就在包根，base = 它所在目录（包根）。
+       picker 拿不到 URL → 无法定位包内其它文件，明确要求用 ?index=。 */
+    if (index && index.entryKind === "manifest") {
+      if (observedBase == null) {
+        return failure(
+          "MISSING_BASE",
+          "manifest.json 不含 base，需要从 URL 反推包根；请用 ?index=<pack>/manifest.json 打开。",
+          "base"
+        );
+      }
+      const bm = validateBase(observedBase, "observedBase");
+      if (!bm.ok) return { ok: false, issues: bm.issues };
+      return success({
+        base: bm.value,
+        indexPath: bm.value + "/" + MANIFEST_NAME,
+        entry: "url",
+        entryName: MANIFEST_NAME,
+        entryKind: "manifest",
+        schemaVersion: 2,
+      });
+    }
+
     const declared = index && typeof index.base === "string" ? index.base : null;
+    const isV3 = index && index.schemaVersion === 2;
+
+    /* v3（schemaVersion 2）：索引无 base，files 是**包根相对**完整路径。
+       包根 = index.json 所在目录去掉末尾的 /spine（§3.3 路径基准统一）。
+       picker 入口拿不到 URL，无法反推 → 明确要求用 ?index=。 */
+    if (isV3) {
+      if (observedBase == null) {
+        return failure(
+          "MISSING_BASE",
+          "schemaVersion 2 的索引不含 base，需要从 URL 反推包根；请用 ?index=<pack>/spine/index.json 打开。",
+          "base"
+        );
+      }
+      const bv = validateBase(observedBase, "observedBase");
+      if (!bv.ok) return { ok: false, issues: bv.issues };
+      const dir = bv.value;
+      const packRoot = /\/spine$/.test(dir) ? dir.slice(0, -"/spine".length) : dir;
+      if (!packRoot) {
+        return failure("INVALID_BASE", "无法从 " + dir + " 反推包根（去掉 /spine 后为空）", "base");
+      }
+      const pr = validateBase(packRoot, "packRoot");
+      if (!pr.ok) return { ok: false, issues: pr.issues };
+      return success({ base: pr.value, indexPath: dir + "/index.json", entry: "url", schemaVersion: 2 });
+    }
+
     if (observedBase == null) {
       if (!declared) {
         return failure(
@@ -352,14 +740,133 @@
     }
     if (param.charAt(0) === "/") return failure("INVALID_INDEX_PARAM", "?index= 不能以 / 开头：" + param);
     if (param.indexOf("\\") >= 0) return failure("INVALID_INDEX_PARAM", "?index= 不能包含反斜杠：" + param);
-    if (!param.endsWith("/index.json")) {
-      return failure("INVALID_INDEX_PARAM", "?index= 必须以 /index.json 结尾：" + param);
+    /* v3.2：入口为 <pack>/manifest.json；仍接受 /index.json 以便给出「旧格式」诊断 */
+    const base0 = param.split("/").pop();
+    if (ENTRY_NAMES.indexOf(base0) < 0) {
+      return failure(
+        "INVALID_INDEX_PARAM",
+        "?index= 必须以 /manifest.json（v3.2）或 /index.json（旧）结尾：" + param
+      );
     }
-    const dir = param.slice(0, -"/index.json".length);
-    if (!dir) return failure("INVALID_INDEX_PARAM", "仓库根不能作为索引目录");
+    const dir = param.slice(0, -(base0.length + 1));
+    if (!dir) return failure("INVALID_INDEX_PARAM", "仓库根不能作为包目录");
     const b = validateBase(dir, "observedBase");
     if (!b.ok) return { ok: false, issues: b.issues };
-    return success({ indexPath: param, observedBase: b.value });
+    return success({ indexPath: param, observedBase: b.value, entryName: base0 });
+  }
+
+  /* ==========================================================================
+   * 2b. 本地目录模式（方案 A）：把「选目录」的结果整理成可查的文件树
+   *
+   * 浏览器只给 File + webkitRelativePath，拿不到绝对路径；v3.2 的路径又是
+   * 包根相对，所以必须先把目录内容索引成 Map<包内相对路径, File>，
+   * 让 fetchBytes / voiceFetchWithTimeout 在本地模式下直接命中。
+   * ====================================================================== */
+
+  /** 路径归一：反斜杠转正斜杠、去 ./ 前缀、折叠重复斜杠、去首尾斜杠 */
+  function normalizeLocalPath(rel) {
+    let p = String(rel == null ? "" : rel).replace(/\\/g, "/");
+    p = p.replace(/\/{2,}/g, "/");
+    while (p.startsWith("./")) p = p.slice(2);
+    if (p.startsWith("/")) p = p.replace(/^\/+/, "");
+    if (p.endsWith("/")) p = p.replace(/\/+$/, "");
+    return p;
+  }
+
+  /** 应当忽略的噪音条目：macOS 元数据、Windows 缩略图、编辑器临时文件 */
+  function shouldIgnoreLocalPath(rel) {
+    const p = normalizeLocalPath(rel);
+    if (!p) return true;
+    for (const seg of p.split("/")) {
+      if (!seg) continue;
+      if (seg === ".DS_Store" || seg === "__MACOSX" || seg === "Thumbs.db" || seg === "desktop.ini") return true;
+      if (seg.startsWith("._")) return true;          // AppleDouble
+      if (seg === ".git" || seg === "node_modules") return true;
+    }
+    return false;
+  }
+
+  /**
+   * 从目录选择结果构建文件树（纯函数，可测）。
+   *
+   * @param {Array<{name?:string, webkitRelativePath?:string}>} fileList
+   * @returns {{tree: Map<string, any>, count: number, root: string|null,
+   *            roots: Array<{root:string, entry:string, depth:number}>, ignored: number}}
+   *   tree  : 包内相对路径（相对 root）→ 原 File 对象
+   *   root  : 选中的包根路径（如 "deepseek"，或选父目录时的 "packs/deepseek"）
+   *   roots : 所有候选包根（含 manifest.json 者优先），按深度升序
+   */
+  function buildLocalTree(fileList) {
+    const files = Array.prototype.slice.call(fileList || []);
+    const norm = [];
+    let ignored = 0;
+    for (const f of files) {
+      const raw = f && (f.webkitRelativePath || f.name);
+      if (!raw || shouldIgnoreLocalPath(raw)) {
+        ignored++;
+        continue;
+      }
+      const rel = normalizeLocalPath(raw);
+      if (!rel) {
+        ignored++;
+        continue;
+      }
+      norm.push({ rel: rel, file: f });
+    }
+
+    /* 第一遍：找候选包根 —— basename 是 manifest.json（首选）或 index.json 的条目 */
+    const candidates = [];
+    for (const it of norm) {
+      const segs = it.rel.split("/");
+      const base = segs[segs.length - 1];
+      if (base !== MANIFEST_NAME && base !== INDEX_NAME) continue;
+      const root = segs.slice(0, -1).join("/");
+      candidates.push({ root: root, entry: base, depth: segs.length - 1 });
+    }
+    /* manifest.json 优先；同优先级按深度升序（选到父目录时取最浅的那个包） */
+    candidates.sort((a, b) => {
+      const am = a.entry === MANIFEST_NAME ? 0 : 1;
+      const bm = b.entry === MANIFEST_NAME ? 0 : 1;
+      return (am - bm) || (a.depth - b.depth) || (a.root < b.root ? -1 : a.root > b.root ? 1 : 0);
+    });
+    const roots = candidates.slice();
+
+    /* 没有候选入口时退回「去掉第一段」：允许目录里直接放散装 index.json */
+    let root = roots.length ? roots[0].root : null;
+    if (root == null) {
+      const segs0 = norm.length ? norm[0].rel.split("/") : [];
+      if (segs0.length >= 2) root = segs0[0];
+    }
+
+    const tree = new Map();
+    const prefix = root ? root + "/" : "";
+    for (const it of norm) {
+      let key;
+      if (root == null) key = it.rel;
+      else if (prefix && it.rel.startsWith(prefix)) key = it.rel.slice(prefix.length);
+      else key = it.rel;                       // 包根之外的条目：保留全路径，仍可被直接命中
+      if (!key) continue;
+      tree.set(key, it.file);
+    }
+    return { tree: tree, count: tree.size, root: root, roots: roots, ignored: ignored };
+  }
+
+  /**
+   * 在文件树里查一个「包根相对路径」。
+   * @param {Map<string, any>} tree
+   * @param {string} rel 已归一化的包内相对路径
+   */
+  function localTreeLookup(tree, rel) {
+    if (!tree || !tree.size) return null;
+    const key = normalizeLocalPath(rel);
+    if (!key) return null;
+    if (tree.has(key)) return tree.get(key);
+    /* Windows 目录大小写不敏感：退回大小写无关匹配 */
+    const low = key.toLowerCase();
+    for (const [k, v] of tree) {
+      if (k.toLowerCase() === low) return v;
+    }
+    return null;
   }
 
   /* ==========================================================================
@@ -379,6 +886,13 @@
         )
       );
     }
+    /* v3 的 textures 是包根相对路径（spine/model.png），atlas 页名是裸文件名（model.png）。
+       比对用 basename；返回值保留索引原值，下游拼 URL 需要完整路径。 */
+    const baseName = (v) => {
+      if (typeof v !== "string") return v;
+      const k = v.lastIndexOf("/");
+      return k < 0 ? v : v.slice(k + 1);
+    };
     const n = Math.max(want.length, pages.length);
     for (let i = 0; i < n; i++) {
       const w = want[i];
@@ -387,7 +901,7 @@
         issues.push(issue("files.textures[" + i + "]", "PAGE_EXTRA", "图集多出第 " + (i + 1) + " 页 " + got + "，索引未列出"));
       } else if (got === undefined) {
         issues.push(issue("files.textures[" + i + "]", "PAGE_MISSING", "索引贴图清单与图集页不一致：缺少 " + w));
-      } else if (got !== w) {
+      } else if (got !== w && got !== baseName(w)) {
         issues.push(
           issue(
             "files.textures[" + i + "]",
@@ -414,8 +928,10 @@
    * @param {object} raw 原始骨架 JSON
    * @param {Array<object>} boneValues 与 raw.bones 同序，元素含 x/y/rotation/scaleX/scaleY
    * @param {Array<string|object>} slotOrder 当前绘制顺序的 slot 名（或 {name,bone,attachment}）
+   * @param {Array<object>} [attachmentEdits] 可选：region 附件局部变换补丁（见 applyAttachmentEdits）。
+   *   缺省（undefined/null）时行为与旧版完全一致；传入时原子应用：任一 issue 直接 ok:false，不交付半成品。
    */
-  function buildPatchedModel(raw, boneValues, slotOrder) {
+  function buildPatchedModel(raw, boneValues, slotOrder, attachmentEdits) {
     if (!isPlainObject(raw)) return failure("NOT_OBJECT", "原始骨架 JSON 不是对象", "");
     const out = clone(raw);
     const values = Array.isArray(boneValues) ? boneValues : [];
@@ -446,12 +962,230 @@
         return known || { name: entry, attachment: null };
       });
     }
-    return success(out);
+
+    if (attachmentEdits === undefined || attachmentEdits === null) return success(out);
+    const attachRes = applyAttachmentEdits(out, attachmentEdits);
+    if (!attachRes.ok) return issuesResult(attachRes.issues);
+    return success(attachRes.value, attachRes.issues);
   }
 
   /** 固定序列化：JSON.stringify(patched,null,1) + "\n" */
   function serializeModel(patched) {
     return JSON.stringify(patched, null, 1) + "\n";
+  }
+
+  /* ==========================================================================
+   * 4b. 附件局部变换补丁（P0-16 附件目标，纯对象补丁，不是字符串替换）
+   * ====================================================================== */
+  /** 附件可编辑字段：与 region 附件 JSON 的局部变换字段一致 */
+  const ATTACH_FIELDS = Object.freeze(["x", "y", "rotation", "scaleX", "scaleY"]);
+
+  /**
+   * 附件类型判定（不猜前缀，只看附件对象自身）：
+   *   - type 是字符串：'region' → region，其余（mesh/linkedmesh/clipping/boundingbox/path…）原样返回；
+   *   - 无 type（旧格式）：有 vertices/triangles 数组 → mesh，否则按 region 处理。
+   */
+  function attachmentKind(att) {
+    if (!isPlainObject(att)) return null;
+    if (typeof att.type === "string" && att.type) return att.type;
+    if (Array.isArray(att.vertices) || Array.isArray(att.triangles)) return "mesh";
+    return "region";
+  }
+
+  /** skins 索引：数组形态 [{name,attachments}] 或对象形态 {default:{attachments}} */
+  function skinLookup(model) {
+    const skins = model ? model.skins : undefined;
+    if (Array.isArray(skins)) {
+      const byName = Object.create(null);
+      for (const el of skins) {
+        if (!isPlainObject(el) || typeof el.name !== "string" || !el.name) continue;
+        if (!(el.name in byName)) byName[el.name] = el;
+      }
+      return { kind: "array", names: Object.keys(byName), byName: byName };
+    }
+    if (isPlainObject(skins)) {
+      const byName = Object.create(null);
+      for (const name of Object.keys(skins)) {
+        if (isPlainObject(skins[name])) byName[name] = skins[name];
+      }
+      return { kind: "object", names: Object.keys(byName), byName: byName };
+    }
+    return null;
+  }
+
+  /**
+   * 取一个 skin 条目的「槽 → 附件」容器。
+   * 数组形态只认 attachments；对象形态优先 attachments，兼容旧式 skin 对象直接以槽名为键。
+   */
+  function attachmentContainer(skin) {
+    if (!isPlainObject(skin)) return null;
+    if (isPlainObject(skin.attachments)) return skin.attachments;
+    return skin;
+  }
+
+  function skinPath(kind, skinName) {
+    return "skins." + skinName + (kind === "array" ? ".attachments" : "");
+  }
+
+  /** 归一化单条 edit：兼容 canonical {skinName,slotName,attachmentName,fields} 与扁平 {skin,slot,attachment,x,y,…} */
+  function normalizeAttachmentEdit(edit) {
+    const src = isPlainObject(edit) ? edit : {};
+    const out = {
+      skinName: typeof src.skinName === "string" && src.skinName ? src.skinName : typeof src.skin === "string" && src.skin ? src.skin : null,
+      slotName: typeof src.slotName === "string" && src.slotName ? src.slotName : typeof src.slot === "string" ? src.slot : "",
+      attachmentName:
+        typeof src.attachmentName === "string" && src.attachmentName
+          ? src.attachmentName
+          : typeof src.attachment === "string" && src.attachment
+            ? src.attachment
+            : null,
+      fields: null,
+    };
+    const fields = Object.create(null);
+    if (isPlainObject(src.fields)) {
+      for (const f of Object.keys(src.fields)) fields[f] = src.fields[f];
+    } else {
+      for (const f of ATTACH_FIELDS) if (Object.prototype.hasOwnProperty.call(src, f)) fields[f] = src[f];
+    }
+    out.fields = fields;
+    return out;
+  }
+
+  /**
+   * 应用附件局部变换补丁（原子：全部合法才交付新模型）。
+   * @param {object} patchedModel raw 或 buildPatchedModel 产物，skins 支持数组/对象两式
+   * @param {Array<object>} edits 每项 {skinName?,slotName,attachmentName?,fields:{x?,y?,rotation?,scaleX?,scaleY?}}
+   *   attachmentName 省略时回退到 slots 里该槽当前 setup attachment（不猜前缀）；
+   *   兼容扁平写法 {skin,slot,attachment,x,y,rotation,scaleX,scaleY}。
+   * @returns {{ok:true,value:object,applied:Array,noop:Array,issues:Array}
+   *          |{ok:false,issues:Array}}
+   *   任一 issue → ok:false，只返回 issues（不交付任何模型），原输入永不修改；
+   *   成功时 value 是新模型，applied 只列真正写入了字段的条目，
+   *   noop 列出「请求值与原值一致、按契约未写」的条目（可见，不静默忽略）。
+   */
+  function applyAttachmentEdits(patchedModel, edits) {
+    if (!isPlainObject(patchedModel)) return { ok: false, value: null, applied: [], issues: [issue("model", "NOT_OBJECT", "模型补丁不是对象")] };
+    if (!Array.isArray(edits)) return { ok: false, value: clone(patchedModel), applied: [], issues: [issue("edits", "ATTACH_EDITS_INVALID", "edits 必须是数组")] };
+
+    const lookup = skinLookup(patchedModel);
+    const issues = [];
+    const plan = [];
+    const seen = Object.create(null);
+
+    for (let i = 0; i < edits.length; i++) {
+      const path0 = "edits[" + i + "]";
+      const edit = normalizeAttachmentEdit(edits[i]);
+      if (!edit.slotName) {
+        issues.push(issue(path0 + ".slotName", "ATTACH_SLOT_REQUIRED", "slotName 必须是非空字符串"));
+        continue;
+      }
+      const fieldNames = Object.keys(edit.fields);
+      if (!fieldNames.length) {
+        issues.push(issue(path0 + ".fields", "ATTACH_NO_FIELDS", "fields 至少要有一个可编辑字段"));
+        continue;
+      }
+      let fieldBad = false;
+      for (const f of fieldNames) {
+        if (ATTACH_FIELDS.indexOf(f) < 0) {
+          issues.push(issue(path0 + ".fields." + f, "ATTACH_FIELD_UNKNOWN", "未知附件字段 " + f + "（只允许 " + ATTACH_FIELDS.join("/") + "）"));
+          fieldBad = true;
+        } else if (!Number.isFinite(edit.fields[f])) {
+          issues.push(issue(path0 + ".fields." + f, "ATTACH_FIELD_VALUE", f + " 必须是有限数字"));
+          fieldBad = true;
+        }
+      }
+      if (fieldBad) continue;
+      if (!lookup || !lookup.names.length) {
+        issues.push(issue(path0, "ATTACH_SKINS_MISSING", "模型没有可用的 skins 段"));
+        continue;
+      }
+      let skinName = edit.skinName;
+      if (!skinName) {
+        if (lookup.byName["default"]) skinName = "default";
+        else if (lookup.names.length === 1) skinName = lookup.names[0];
+        else {
+          issues.push(
+            issue(
+              path0 + ".skinName",
+              "ATTACH_SKIN_AMBIGUOUS",
+              "未指定 skinName，且没有 default、skin 也不唯一（" + lookup.names.join("/") + "），已拒绝"
+            )
+          );
+          continue;
+        }
+      }
+      const skin = lookup.byName[skinName];
+      const sPath = skinPath(lookup.kind, skinName);
+      if (!skin) {
+        issues.push(issue(path0 + ".skinName", "ATTACH_SKIN_MISSING", "找不到 skin " + skinName));
+        continue;
+      }
+      const container = attachmentContainer(skin);
+      const slotBag = isPlainObject(container) ? container[edit.slotName] : null;
+      const slotPath = sPath + "." + edit.slotName;
+      if (!isPlainObject(slotBag)) {
+        issues.push(issue(slotPath, "ATTACH_SLOT_MISSING", "skin " + skinName + " 里找不到槽 " + edit.slotName + " 的附件表"));
+        continue;
+      }
+      let attachmentName = edit.attachmentName;
+      if (!attachmentName) {
+        const slotEntry = (Array.isArray(patchedModel.slots) ? patchedModel.slots : []).filter(function (s) {
+          return isPlainObject(s) && s.name === edit.slotName;
+        })[0];
+        if (slotEntry && typeof slotEntry.attachment === "string" && slotEntry.attachment) attachmentName = slotEntry.attachment;
+        else {
+          issues.push(issue(slotPath, "ATTACH_NAME_REQUIRED", "未指定 attachmentName，且 slots 里该槽没有 setup attachment"));
+          continue;
+        }
+      }
+      const attPath = slotPath + "." + attachmentName;
+      const att = slotBag[attachmentName];
+      if (!isPlainObject(att)) {
+        issues.push(issue(attPath, "ATTACH_MISSING", "找不到附件 " + attachmentName));
+        continue;
+      }
+      const kind = attachmentKind(att);
+      if (kind !== "region") {
+        issues.push(issue(attPath + ".type", "ATTACH_UNSUPPORTED_TYPE", "只支持 region 附件，当前是 " + kind + "（加权/网格附件不支持局部变换编辑）"));
+        continue;
+      }
+      const dupKey = skinName + "/" + edit.slotName + "/" + attachmentName;
+      if (seen[dupKey]) {
+        issues.push(issue(attPath, "ATTACH_DUPLICATE", "同一次补丁里重复编辑同一个附件（" + dupKey + "），已拒绝"));
+        continue;
+      }
+      seen[dupKey] = true;
+      /* 契约 §5：只在有效数值相对原值（缺省 x/y/r=0、scale=1）确实变化时写字段，避免制造默认值噪声 */
+      const fields = {};
+      const requested = {};
+      for (const f of fieldNames) {
+        const dflt = FIELD_DEFAULTS[f];
+        const before = Number.isFinite(att[f]) ? att[f] : dflt;
+        const now = round(edit.fields[f], 6);
+        requested[f] = now;
+        if (Math.abs(now - before) > 1e-9) fields[f] = now;
+      }
+      plan.push({ skinName: skinName, slotName: edit.slotName, attachmentName: attachmentName, fields: fields, requested: requested, path: attPath });
+    }
+
+    if (issues.length) return { ok: false, issues: issues };
+
+    const out = clone(patchedModel);
+    const outLookup = skinLookup(out);
+    const applied = [];
+    const noop = [];
+    for (const item of plan) {
+      const written = Object.keys(item.fields);
+      if (!written.length) {
+        noop.push({ skinName: item.skinName, slotName: item.slotName, attachmentName: item.attachmentName, fields: clone(item.requested) });
+        continue;
+      }
+      const container = attachmentContainer(outLookup.byName[item.skinName]);
+      const att = container[item.slotName][item.attachmentName];
+      for (const f of written) att[f] = item.fields[f];
+      applied.push({ skinName: item.skinName, slotName: item.slotName, attachmentName: item.attachmentName, fields: clone(item.fields) });
+    }
+    return { ok: true, value: out, applied: applied, noop: noop, issues: [] };
   }
 
   /** 索引规范化序列化：schemaVersion/base/label/files 顺序，2 空格，结尾换行 */
@@ -805,6 +1539,7 @@
     LIMITS: LIMITS,
     PATCH_FIELDS: PATCH_FIELDS,
     FIELD_DEFAULTS: FIELD_DEFAULTS,
+    ATTACH_FIELDS: ATTACH_FIELDS,
 
     validateFilename: validateFilename,
     validateBase: validateBase,
@@ -812,11 +1547,24 @@
     parseIndexText: parseIndexText,
     parseIndexParam: parseIndexParam,
     resolveIndexLocation: resolveIndexLocation,
+    validateManifest: validateManifest,
+    normalizePackPath: normalizePackPath,
+    buildLocalTree: buildLocalTree,
+    localTreeLookup: localTreeLookup,
+    normalizeLocalPath: normalizeLocalPath,
+    shouldIgnoreLocalPath: shouldIgnoreLocalPath,
+    looksLikeManifest: looksLikeManifest,
+    looksLikeLegacyIndex: looksLikeLegacyIndex,
+    MANIFEST_SCHEMA_VERSION: MANIFEST_SCHEMA_VERSION,
+    ENTRY_NAMES: ENTRY_NAMES.slice(),
+    OLD_FORMAT_CODE: OLD_FORMAT_CODE,
     validateTexturePages: validateTexturePages,
 
     buildPatchedModel: buildPatchedModel,
     serializeModel: serializeModel,
     serializeIndex: serializeIndex,
+    applyAttachmentEdits: applyAttachmentEdits,
+    attachmentKind: attachmentKind,
 
     crc32: crc32,
     checkZipEntries: checkZipEntries,

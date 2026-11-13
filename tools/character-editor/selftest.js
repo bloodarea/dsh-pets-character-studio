@@ -174,6 +174,20 @@
 
     if (exp.issueCodes) {
       exp.issueCodes.forEach(function (code) {
+        /* P2（T24）：deform 已求值 —— fixture 里遗留的 "animation.deform.unsupported" 期望在此升级为
+           "不得再出现该告警"（fixture 文件不在本任务写域，真实行为见 runDeform）。 */
+        if (code === "animation.deform.unsupported") {
+          ok(
+            "deform 已求值（不再报 " + code + "）",
+            !issues.some(function (i) {
+              return i.code === code;
+            }),
+            issues.map(function (i) {
+              return i.code;
+            })
+          );
+          return;
+        }
         ok(
           "issue 存在 " + code,
           issues.some(function (i) {
@@ -848,6 +862,127 @@
     B.resolveIndexLocation(locInput, mainIdx.base);
     ok("resolveIndexLocation 不修改调用者对象", JSON.stringify(locInput) === locBefore);
 
+    /* ---- buildLocalTree / localTreeLookup（task-13：本地目录模式）---- */
+    function lf(rel) { return { name: rel.split("/").pop(), webkitRelativePath: rel }; }
+    var treeMain = B.buildLocalTree([
+      lf("deepseek/manifest.json"),
+      lf("deepseek/catalog.json"),
+      lf("deepseek/spine/model.json"),
+      lf("deepseek/voice/index.json"),
+      lf("deepseek/voice/connected/connected_01.ogg"),
+      lf("deepseek/.DS_Store"),
+      lf("deepseek/__MACOSX/._manifest.json"),
+      lf("deepseek/spine/._model.json"),
+    ]);
+    eq("buildLocalTree 包根 = 第一段", treeMain.root, "deepseek");
+    eq("buildLocalTree 文件数（忽略噪音）", treeMain.count, 5);
+    ok("buildLocalTree 忽略 .DS_Store", treeMain.tree.has(".DS_Store") === false);
+    ok("buildLocalTree 忽略 __MACOSX", treeMain.tree.has("__MACOSX/._manifest.json") === false);
+    ok("buildLocalTree 忽略 AppleDouble ._", treeMain.tree.has("spine/._model.json") === false);
+    ok("buildLocalTree 顶层 key 归一", treeMain.tree.has("manifest.json") === true);
+    ok("buildLocalTree 子目录 key 归一", treeMain.tree.has("spine/model.json") === true);
+    ok("buildLocalTree 深层 key 归一", treeMain.tree.has("voice/connected/connected_01.ogg") === true);
+
+    /* 选到父目录时：取最浅的包根，且 manifest.json 优先于 index.json */
+    var treeParent = B.buildLocalTree([
+      lf("packs/deepseek/manifest.json"),
+      lf("packs/deepseek/spine/model.json"),
+      lf("packs/other/index.json"),
+    ]);
+    eq("buildLocalTree 选到父目录仍取到包根", treeParent.root, "packs/deepseek");
+    ok("buildLocalTree 父目录下 key 相对包根", treeParent.tree.has("spine/model.json") === true);
+    ok("buildLocalTree manifest 优先于 index.json", treeParent.roots[0].entry === "manifest.json");
+
+    /* 反斜杠 / 重复斜杠 / ./ 前缀的归一 */
+    eq("normalizeLocalPath 反斜杠转正斜杠", B.normalizeLocalPath("a\\b\\c.json"), "a/b/c.json");
+    eq("normalizeLocalPath 折叠重复斜杠", B.normalizeLocalPath("a//b///c.json"), "a/b/c.json");
+    eq("normalizeLocalPath 去 ./ 前缀", B.normalizeLocalPath("./a/b.json"), "a/b.json");
+    eq("normalizeLocalPath 去首尾斜杠", B.normalizeLocalPath("/a/b/"), "a/b");
+
+    /* 查找：精确命中 + 大小写不敏感回退 + 未命中返回 null */
+    ok("localTreeLookup 精确命中", B.localTreeLookup(treeMain.tree, "spine/model.json") !== null);
+    ok("localTreeLookup 大小写不敏感回退", B.localTreeLookup(treeMain.tree, "SPINE/Model.JSON") !== null);
+    ok("localTreeLookup 未命中返回 null", B.localTreeLookup(treeMain.tree, "spine/nope.json") === null);
+    ok("localTreeLookup 空树返回 null", B.localTreeLookup(new Map(), "a.json") === null);
+
+    /* 只有 index.json 的旧目录：仍能建树（走旧格式提示路径） */
+    var treeLegacy = B.buildLocalTree([lf("oldpack/index.json"), lf("oldpack/model.json")]);
+    eq("buildLocalTree 旧包 index.json 作为入口", treeLegacy.roots[0].entry, "index.json");
+    eq("buildLocalTree 旧包 root", treeLegacy.root, "oldpack");
+    eq("buildLocalTree 空输入 count 0", B.buildLocalTree([]).count, 0);
+
+    /* ---- 旧格式（v3.1 及更早）包：明确报 OLD_FORMAT_PACK，不当普通错误吞掉 ----
+       这条守卫的来历：workspace/ 下有 20+ 个遗留的旧 index.json（e2e 夹具、handoff 快照），
+       它们都没有 manifest.json；「打开文件…」选到这类目录时 buildLocalTree 会退回
+       index.json 当入口（上一组断言正是这个行为）。
+       若这条分支退化成通用的字段校验失败，用户看到的是无从下手的字段错误，
+       而不是「这是个旧包，该用 manifest.json」。 */
+    var legacyIndexText = JSON.stringify({
+      schemaVersion: 1, base: "oldpack",
+      files: { model: "model.json", atlas: "model.atlas", textures: ["model.png"] },
+    });
+    var legacyRes = B.parseIndexText(legacyIndexText);
+    ok("旧格式 index.json 被识别为旧格式（OLD_FORMAT_PACK）",
+      legacyRes.ok === false &&
+        (legacyRes.issues || []).some(function (i) { return i.code === "OLD_FORMAT_PACK"; }),
+      JSON.stringify((legacyRes.issues || []).map(function (i) { return i.code; })));
+    ok("旧格式提示文案含 manifest.json 指引",
+      (legacyRes.issues || []).some(function (i) {
+        return String(i.message || "").indexOf("manifest.json") >= 0 && String(i.message || "").indexOf("旧格式") >= 0;
+      }));
+    /* 反向守卫：v3.2 manifest 绝不能被误判成旧格式，否则正常包全打不开 */
+    var v32ManifestText = JSON.stringify({
+      packFormatVersion: 3, manifestSchemaVersion: 2, id: "x", version: "1.0.0",
+      displayName: "x", render: {}, spine: {}, catalog: {}, events: {},
+      license: {}, credits: {},
+    });
+    ok("v3.2 manifest 不被判成旧格式",
+      (B.parseIndexText(v32ManifestText).issues || []).every(function (i) { return i.code !== "OLD_FORMAT_PACK"; }));
+
+    /* ---- normalizePackPath（task-14：载入路径入参规范化，纯函数）---- */
+    function npOk(what, input, expected) {
+      var r = B.normalizePackPath(input);
+      ok("normalizePackPath " + what, r.ok === true && r.value === expected);
+    }
+    function npBad(what, input, reasonPart) {
+      var r = B.normalizePackPath(input);
+      ok("normalizePackPath " + what,
+        r.ok === false && typeof r.reason === "string" && r.reason.indexOf(reasonPart) >= 0);
+    }
+
+    /* 接受：目录自动补 manifest.json */
+    npOk("包目录补 manifest.json", "workspace/packs/deepseek", "workspace/packs/deepseek/manifest.json");
+    npOk("包目录尾斜杠", "workspace/packs/deepseek/", "workspace/packs/deepseek/manifest.json");
+    npOk("包目录多尾斜杠", "workspace/packs/deepseek///", "workspace/packs/deepseek/manifest.json");
+    npOk("首尾空白被 trim", "  workspace/packs/deepseek  ", "workspace/packs/deepseek/manifest.json");
+    npOk("./ 前缀被剥", "./workspace/packs/deepseek", "workspace/packs/deepseek/manifest.json");
+    npOk("重复斜杠被折叠", "workspace//packs///deepseek", "workspace/packs/deepseek/manifest.json");
+    /* 接受：入口文件原样 */
+    npOk("已是 manifest.json 原样", "workspace/packs/deepseek/manifest.json", "workspace/packs/deepseek/manifest.json");
+    npOk("旧包 index.json 原样", "workspace/packs/old/index.json", "workspace/packs/old/index.json");
+    /* 接受：粘贴 URL 时剥 ?index= */
+    npOk("整条 URL 剥 ?index=",
+      "http://127.0.0.1:8123/tools/character-editor/index.html?index=workspace/packs/deepseek",
+      "workspace/packs/deepseek/manifest.json");
+    npOk("?index= 值已含 manifest.json",
+      "http://127.0.0.1:8123/x.html?index=workspace/packs/deepseek/manifest.json",
+      "workspace/packs/deepseek/manifest.json");
+    npOk("?index= 编码后的值", "http://127.0.0.1:8123/x.html?index=a%2Fb%2Fc",
+      "a/b/c/manifest.json");
+
+    /* 拒绝：每类都要给具体原因，不能是通用兜底 */
+    npBad("空输入", "", "仓库相对路径");
+    npBad("全空白输入", "   ", "仓库相对路径");
+    npBad("以 / 开头（站点根）", "/workspace/packs/deepseek", "站点根");
+    npBad("反斜杠", "workspace\\packs\\deepseek", "正斜杠");
+    npBad("含 ..", "workspace/../secret", "..");
+    npBad("file: 本地地址", "file:///F:/packs/deepseek", "选包目录");
+    npBad("带协议的地址", "https://example.com/pack.json", "带协议");
+    npBad("非入口的 .json", "workspace/packs/deepseek/model.json", "只接受 manifest.json");
+    /* 拒绝时不得带 value（调用方不该在失败分支读到路径） */
+    var npFail = B.normalizePackPath("/abs/path");
+    ok("normalizePackPath 失败分支无 value", npFail.value === undefined);
+
     /* ---- validateTexturePages：页名/顺序严格一致 ---- */
     var pages1 = [{ name: "model.png" }];
     ok("validateTexturePages 单页一致", B.validateTexturePages(mainIdx, pages1).ok === true);
@@ -908,6 +1043,212 @@
     ok("无改动与原文语义一致", same(noChange, rawModel));
     ok("serializeModel 固定格式（1 空格缩进 + 结尾换行）", B.serializeModel(pm) === JSON.stringify(pm, null, 1) + "\n");
     ok("serializeIndex 固定格式（2 空格 + 结尾换行）", B.serializeIndex(mainIdx) === JSON.stringify(mainIdx, null, 2) + "\n");
+
+    /* ---- applyAttachmentEdits：region 附件定点补丁（原子，数组 skins） ---- */
+    currentCase = "(bundle-attachment)";
+    var ATT_MODEL = {
+      skeleton: { spine: "4.2.00", unknown: { keep: 1 } },
+      bones: [{ name: "root", x: 0, y: 0 }],
+      slots: [
+        { name: "s1", bone: "root", attachment: "a1" },
+        { name: "s2", bone: "root", attachment: "m1", extra: 7 },
+      ],
+      skins: [
+        {
+          name: "default",
+          attachments: {
+            s1: {
+              a1: { type: "region", path: "a1", x: 1, y: 2, rotation: 0, scaleX: 1, scaleY: 1, width: 10, height: 20, unknownField: "keep" },
+              aNoType: { path: "aNoType", x: 0, y: 0, width: 4, height: 5 },
+              a2bare: { type: "region", path: "a2bare", width: 2, height: 3 },
+            },
+            s2: { m1: { type: "mesh", path: "m1", uvs: [0, 0, 1, 0, 1, 1], triangles: [0, 1, 2], vertices: [0, 0, 10, 0, 10, 10] } },
+          },
+        },
+        { name: "alt", attachments: { s1: { a2: { type: "region", path: "a2", x: 5, y: 6, width: 1, height: 1 } } } },
+      ],
+      animations: { idle: { bones: {} } },
+      unknownTop: "keep",
+    };
+    var ATT_BEFORE = JSON.stringify(ATT_MODEL);
+    var attRes = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a1", fields: { x: 3.5, y: -2.25 } }]);
+    ok("applyAttachmentEdits region 补丁成功", attRes.ok === true, JSON.stringify(attRes.issues));
+    ok("applied 记录定位信息", attRes.applied.length === 1 && attRes.applied[0].slotName === "s1" && attRes.applied[0].attachmentName === "a1");
+    ok("applied 记录字段值", attRes.applied[0].fields.x === 3.5 && attRes.applied[0].fields.y === -2.25);
+    ok("默认 skin 解析为 default", attRes.applied[0].skinName === "default");
+    ok(
+      "除目标字段外整模型语义不变",
+      same(attRes.value, mutate(ATT_MODEL, function (o) { o.skins[0].attachments.s1.a1.x = 3.5; o.skins[0].attachments.s1.a1.y = -2.25; }))
+    );
+    ok(
+      "目标附件其它字段字节级保留",
+      attRes.value.skins[0].attachments.s1.a1.width === 10 &&
+        attRes.value.skins[0].attachments.s1.a1.height === 20 &&
+        attRes.value.skins[0].attachments.s1.a1.path === "a1" &&
+        attRes.value.skins[0].attachments.s1.a1.type === "region" &&
+        attRes.value.skins[0].attachments.s1.a1.unknownField === "keep"
+    );
+    ok("附件补丁不修改入参", JSON.stringify(ATT_MODEL) === ATT_BEFORE);
+    ok("外层未知字段/skeleton/animations 保留", attRes.value.unknownTop === "keep" && same(attRes.value.skeleton, ATT_MODEL.skeleton) && !!attRes.value.animations.idle);
+    ok("未编辑的 skin 保留", same(attRes.value.skins[1], ATT_MODEL.skins[1]));
+    var attRot = B.applyAttachmentEdits(ATT_MODEL, [{ skinName: "default", slotName: "s1", attachmentName: "a1", fields: { rotation: 12.5, scaleX: 2, scaleY: 0.5 } }]);
+    ok("rotation/scaleX/scaleY 可写", attRot.ok && attRot.value.skins[0].attachments.s1.a1.rotation === 12.5 && attRot.value.skins[0].attachments.s1.a1.scaleX === 2 && attRot.value.skins[0].attachments.s1.a1.scaleY === 0.5);
+    var attRound = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a1", fields: { x: 0.1234567 } }]);
+    near("字段值六位小数舍入", attRound.value.skins[0].attachments.s1.a1.x, 0.123457);
+    var attAlt = B.applyAttachmentEdits(ATT_MODEL, [{ skinName: "alt", slotName: "s1", attachmentName: "a2", fields: { x: -1 } }]);
+    ok("命名 skin 定点 patch", attAlt.ok && attAlt.value.skins[1].attachments.s1.a2.x === -1);
+    ok("命名 skin 不影响 default", attAlt.value.skins[0].attachments.s1.a1.x === 1);
+    ok("命名 skin 定位写入 issues 之外的 applied", attAlt.applied[0].skinName === "alt");
+    var attFallback = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", fields: { x: 7 } }]);
+    ok("省略 attachmentName 回退 slots 的 setup attachment", attFallback.ok && attFallback.value.skins[0].attachments.s1.a1.x === 7);
+    var attLegacyType = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "aNoType", fields: { y: 4 } }]);
+    ok("无 type 字段的旧式 region 附件可编辑", attLegacyType.ok && attLegacyType.value.skins[0].attachments.s1.aNoType.y === 4);
+
+    /* ---- 契约 §5：只在有效数值相对原值确实变化时写字段（x/y/r 默认0、scale默认1） ---- */
+    var noChangeRes = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a1", fields: { x: 1 } }]);
+    ok("请求值等于原值 → 无操作成功", noChangeRes.ok === true && noChangeRes.applied.length === 0);
+    ok("无操作条目记入 noop（不静默忽略）", noChangeRes.noop.length === 1 && noChangeRes.noop[0].fields.x === 1);
+    ok("无操作时模型语义不变", same(noChangeRes.value, ATT_MODEL));
+    var bareRes = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a2bare", fields: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1 } }]);
+    ok(
+      "全默认值请求不新增任何字段",
+      bareRes.ok && bareRes.applied.length === 0 && bareRes.noop.length === 1 &&
+        !("x" in bareRes.value.skins[0].attachments.s1.a2bare) &&
+        !("rotation" in bareRes.value.skins[0].attachments.s1.a2bare) &&
+        !("scaleX" in bareRes.value.skins[0].attachments.s1.a2bare)
+    );
+    ok("全默认值请求不改变模型字节", same(bareRes.value, ATT_MODEL));
+    var bareWrite = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a2bare", fields: { x: 4, scaleX: 1 } }]);
+    ok("非默认字段写入、默认字段跳过", bareWrite.value.skins[0].attachments.s1.a2bare.x === 4 && !("scaleX" in bareWrite.value.skins[0].attachments.s1.a2bare));
+    ok("applied 只列真正写入的字段", bareWrite.applied.length === 1 && bareWrite.applied[0].fields.x === 4 && bareWrite.applied[0].fields.scaleX === undefined);
+    var zeroRes = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a1", fields: { x: 0 } }]);
+    ok("显式归零相对原值有变化 → 必须写入", zeroRes.ok && zeroRes.value.skins[0].attachments.s1.a1.x === 0 && zeroRes.applied.length === 1);
+    var mixFields = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a1", fields: { x: 1, y: -9 } }]);
+    ok(
+      "同一条目内只写变化的字段",
+      mixFields.value.skins[0].attachments.s1.a1.x === 1 && mixFields.value.skins[0].attachments.s1.a1.y === -9 &&
+        mixFields.applied[0].fields.y === -9 && mixFields.applied[0].fields.x === undefined
+    );
+    ok("混合条目只写变化字段（未写字段不出现在 applied）", (function () {
+      var r = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a1", fields: { rotation: 0, y: 5 } }]);
+      return r.ok && r.noop.length === 0 && r.applied.length === 1 && r.applied[0].fields.y === 5 && r.applied[0].fields.rotation === undefined;
+    })());
+    ok("同批内 applied 与 noop 分别归类", (function () {
+      var r = B.applyAttachmentEdits(ATT_MODEL, [
+        { slotName: "s1", attachmentName: "a1", fields: { y: 5 } },
+        { slotName: "s1", attachmentName: "aNoType", fields: { x: 0 } },
+      ]);
+      return r.ok && r.applied.length === 1 && r.applied[0].attachmentName === "a1" && r.noop.length === 1 && r.noop[0].attachmentName === "aNoType";
+    })());
+
+    /* ---- 对象形态 / 旧式 skin 对象 ---- */
+    var OBJ_SKINS = {
+      slots: [{ name: "s1", bone: "root", attachment: "a1" }],
+      skins: { default: { attachments: { s1: { a1: { type: "region", x: 0, y: 0, width: 1, height: 1 } } } } },
+      unknownTop: "keep",
+    };
+    var objRes = B.applyAttachmentEdits(OBJ_SKINS, [{ slotName: "s1", attachmentName: "a1", fields: { x: 8 } }]);
+    ok("对象形态 skins 定点 patch", objRes.ok && objRes.value.skins.default.attachments.s1.a1.x === 8);
+    ok("对象形态除目标字段外语义不变", same(objRes.value, mutate(OBJ_SKINS, function (o) { o.skins.default.attachments.s1.a1.x = 8; })));
+    var LEGACY_SKINS = { slots: [{ name: "s1", bone: "root", attachment: "a1" }], skins: { default: { s1: { a1: { type: "region", x: 0, y: 0 } } } } };
+    var legRes = B.applyAttachmentEdits(LEGACY_SKINS, [{ slotName: "s1", attachmentName: "a1", fields: { y: 4 } }]);
+    ok("旧式 skin 对象（槽名直挂）兼容", legRes.ok && legRes.value.skins.default.s1.a1.y === 4);
+
+    /* ---- 扁平兼容写法 ---- */
+    var flatRes = B.applyAttachmentEdits(ATT_MODEL, [{ skin: "default", slot: "s1", attachment: "a1", x: 1.5 }]);
+    ok("扁平写法 {skin,slot,attachment,x} 生效", flatRes.ok && flatRes.value.skins[0].attachments.s1.a1.x === 1.5);
+    ok(
+      "扁平与 canonical 结果一致",
+      same(flatRes.value, B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a1", fields: { x: 1.5 } }]).value)
+    );
+
+    /* ---- 拒绝路径：原子失败、零改动 ---- */
+    var meshRes = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s2", attachmentName: "m1", fields: { x: 1 } }]);
+    ok("mesh 附件拒绝", !meshRes.ok && meshRes.issues[0].code === "ATTACH_UNSUPPORTED_TYPE");
+    ok("失败结果不交付模型/applied（契约 §5）", meshRes.value === undefined && meshRes.applied === undefined);
+    ok("mesh 附件零改动（入参不变）", JSON.stringify(ATT_MODEL) === ATT_BEFORE);
+    ok("mesh 错误定位到附件 type", meshRes.issues[0].path === "skins.default.attachments.s2.m1.type");
+    var mixedRes = B.applyAttachmentEdits(ATT_MODEL, [
+      { slotName: "s1", attachmentName: "a1", fields: { x: 99 } },
+      { slotName: "s2", attachmentName: "m1", fields: { x: 1 } },
+    ]);
+    ok("混合合法+mesh 整批失败", !mixedRes.ok);
+    ok("整批失败零改动（合法条目也不写）", JSON.stringify(ATT_MODEL) === ATT_BEFORE);
+    ok("整批失败不交付模型", mixedRes.value === undefined && mixedRes.applied === undefined);
+    var missSlot = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "nope", fields: { x: 1 } }]);
+    ok("找不到 slot 拒绝", !missSlot.ok && missSlot.issues[0].code === "ATTACH_SLOT_MISSING");
+    var missAtt = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "nope", fields: { x: 1 } }]);
+    ok("找不到附件拒绝", !missAtt.ok && missAtt.issues[0].code === "ATTACH_MISSING");
+    var missSkin = B.applyAttachmentEdits(ATT_MODEL, [{ skinName: "nope", slotName: "s1", attachmentName: "a1", fields: { x: 1 } }]);
+    ok("找不到 skin 拒绝", !missSkin.ok && missSkin.issues[0].code === "ATTACH_SKIN_MISSING");
+    var noSlotName = B.applyAttachmentEdits(ATT_MODEL, [{ fields: { x: 1 } }]);
+    ok("缺 slotName 拒绝", !noSlotName.ok && noSlotName.issues[0].code === "ATTACH_SLOT_REQUIRED");
+    var noName = B.applyAttachmentEdits({ slots: [{ name: "s1", attachment: null }], skins: { default: { attachments: { s1: {} } } } }, [{ slotName: "s1", fields: { x: 1 } }]);
+    ok("无 setup attachment 且未指定名 → 拒绝", !noName.ok && noName.issues[0].code === "ATTACH_NAME_REQUIRED");
+    var badVal = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a1", fields: { x: "1" } }]);
+    ok("字符串字段值拒绝", !badVal.ok && badVal.issues[0].code === "ATTACH_FIELD_VALUE");
+    var nanVal = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a1", fields: { x: NaN } }]);
+    ok("NaN 字段值拒绝", !nanVal.ok && nanVal.issues[0].code === "ATTACH_FIELD_VALUE");
+    var infVal = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a1", fields: { y: Infinity } }]);
+    ok("Infinity 字段值拒绝", !infVal.ok && infVal.issues[0].code === "ATTACH_FIELD_VALUE");
+    var unknownField = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a1", fields: { z: 1 } }]);
+    ok("未知字段拒绝", !unknownField.ok && unknownField.issues[0].code === "ATTACH_FIELD_UNKNOWN");
+    var emptyFields = B.applyAttachmentEdits(ATT_MODEL, [{ slotName: "s1", attachmentName: "a1", fields: {} }]);
+    ok("空 fields 拒绝", !emptyFields.ok && emptyFields.issues[0].code === "ATTACH_NO_FIELDS");
+    var dupRes = B.applyAttachmentEdits(ATT_MODEL, [
+      { slotName: "s1", attachmentName: "a1", fields: { x: 1 } },
+      { slotName: "s1", attachmentName: "a1", fields: { y: 2 } },
+    ]);
+    ok("重复编辑同一附件拒绝", !dupRes.ok && dupRes.issues[0].code === "ATTACH_DUPLICATE");
+    ok("重复编辑零改动且不交付模型", dupRes.value === undefined && JSON.stringify(ATT_MODEL) === ATT_BEFORE);
+    var ambiguous = B.applyAttachmentEdits(
+      { skins: { a: { attachments: { s1: { x1: { type: "region" } } } }, b: { attachments: {} } } },
+      [{ slotName: "s1", attachmentName: "x1", fields: { x: 1 } }]
+    );
+    ok("多 skin 无 default 且未指定 skinName → 拒绝", !ambiguous.ok && ambiguous.issues[0].code === "ATTACH_SKIN_AMBIGUOUS");
+    var singleSkin = B.applyAttachmentEdits({ skins: { only: { attachments: { s1: { a1: { type: "region", x: 0 } } } } } }, [{ slotName: "s1", attachmentName: "a1", fields: { x: 2 } }]);
+    ok("单一 skin 自动命中", singleSkin.ok && singleSkin.applied[0].skinName === "only");
+    var notArr = B.applyAttachmentEdits(ATT_MODEL, "nope");
+    ok("edits 非数组拒绝", !notArr.ok && notArr.issues[0].code === "ATTACH_EDITS_INVALID");
+    var notObj = B.applyAttachmentEdits(null, []);
+    ok("模型非对象拒绝", !notObj.ok && notObj.issues[0].code === "NOT_OBJECT");
+    var emptyEdits = B.applyAttachmentEdits(ATT_MODEL, []);
+    ok("空 edits 为无操作成功", emptyEdits.ok && emptyEdits.applied.length === 0 && same(emptyEdits.value, ATT_MODEL));
+    ok("全部拒绝路径都不改入参", JSON.stringify(ATT_MODEL) === ATT_BEFORE);
+
+    /* ---- attachmentKind / 常量 ---- */
+    eq("attachmentKind region", B.attachmentKind({ type: "region" }), "region");
+    eq("attachmentKind mesh", B.attachmentKind({ type: "mesh" }), "mesh");
+    eq("attachmentKind linkedmesh 原样", B.attachmentKind({ type: "linkedmesh" }), "linkedmesh");
+    eq("attachmentKind 无 type 无顶点按 region", B.attachmentKind({ x: 0 }), "region");
+    eq("attachmentKind 无 type 有三角按 mesh", B.attachmentKind({ triangles: [0, 1, 2] }), "mesh");
+    eq("attachmentKind 非对象 null", B.attachmentKind(null), null);
+    ok("ATTACH_FIELDS 冻结", Object.isFrozen(B.ATTACH_FIELDS));
+    eq("ATTACH_FIELDS 内容", B.ATTACH_FIELDS.join(","), "x,y,rotation,scaleX,scaleY");
+
+    /* ---- buildPatchedModel 第 4 参（向后兼容 + 原子） ---- */
+    var valuesBone = [{ x: 9, y: 0, rotation: 0, scaleX: 1, scaleY: 1 }];
+    var p3 = B.buildPatchedModel(ATT_MODEL, valuesBone, null);
+    var p3b = B.buildPatchedModel(ATT_MODEL, valuesBone, null, undefined);
+    var p3c = B.buildPatchedModel(ATT_MODEL, valuesBone, null, null);
+    ok("第4参缺省/undefined/null 行为一致", same(p3.value, p3b.value) && same(p3.value, p3c.value));
+    ok("第4参缺省时序列化字节级一致", B.serializeModel(p3.value) === B.serializeModel(p3b.value) && B.serializeModel(p3.value) === B.serializeModel(p3c.value));
+    ok("第4参缺省时附件未被改动", p3.value.skins[0].attachments.s1.a1.x === 1 && same(p3.value.skins, ATT_MODEL.skins));
+    var p4 = B.buildPatchedModel(ATT_MODEL, valuesBone, null, [{ slotName: "s1", attachmentName: "a1", fields: { x: 3, y: 4 } }]);
+    ok("第4参应用附件补丁", p4.ok && p4.value.skins[0].attachments.s1.a1.x === 3 && p4.value.skins[0].attachments.s1.a1.y === 4);
+    ok("骨补丁与附件补丁同时生效", p4.value.bones[0].x === 9 && p4.value.skins[0].attachments.s1.a1.x === 3);
+    ok("第4参不修改入参", JSON.stringify(ATT_MODEL) === ATT_BEFORE);
+    var p4round = JSON.parse(B.serializeModel(p4.value));
+    ok("serializeModel 往返保留附件补丁", p4round.skins[0].attachments.s1.a1.x === 3 && p4round.skins[0].attachments.s1.a1.y === 4);
+    var p4bad = B.buildPatchedModel(ATT_MODEL, valuesBone, null, [{ slotName: "s2", attachmentName: "m1", fields: { x: 1 } }]);
+    ok("第4参非法 → ok:false", !p4bad.ok);
+    ok("第4参非法 → issues 透传定位", p4bad.issues[0].code === "ATTACH_UNSUPPORTED_TYPE" && p4bad.issues[0].path === "skins.default.attachments.s2.m1.type");
+    ok("第4参非法 → 不交付半成品模型", p4bad.value === undefined);
+    var p4empty = B.buildPatchedModel(ATT_MODEL, valuesBone, null, []);
+    ok("第4参空数组等价缺省", same(p4empty.value, p3.value));
+    var p4noop = B.buildPatchedModel(ATT_MODEL, valuesBone, null, [{ slotName: "s1", attachmentName: "a1", fields: { x: 1 } }]);
+    ok("第4参全无操作 → 与缺省序列化字节级一致", p4noop.ok && B.serializeModel(p4noop.value) === B.serializeModel(p3.value));
+    currentCase = "(bundle)";
 
     /* ---- 保存请求/响应纯校验 ---- */
     var names = B.targetNames(mainIdx);
@@ -2313,6 +2654,263 @@
   /* ------------------------------------------------------------------ *
    * 运行与渲染
    * ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------ *
+   * P2：deform 形变求值（T24）
+   * ------------------------------------------------------------------ */
+  function runDeform() {
+    var ATLAS = "tex.png\nsize: 256, 256\nmRigid\nbounds: 0, 0, 32, 32\nmWeight\nbounds: 32, 0, 32, 32\nmReg\nbounds: 64, 0, 32, 32\n";
+    var atlasRes = core.parseAtlas(ATLAS);
+    ok("deform 夹具 atlas 解析", atlasRes.ok, atlasRes.issues);
+    var atlas = atlasRes.value;
+
+    var RIGID = {
+      skeleton: { spine: "4.2.22" },
+      bones: [{ name: "root" }, { name: "A", parent: "root", rotation: 30, length: 100 }],
+      slots: [{ name: "s", bone: "A", attachment: "m" }],
+      skins: [
+        {
+          name: "default",
+          attachments: {
+            s: { m: { type: "mesh", path: "mRigid", uvs: [0, 0, 1, 0, 1, 1, 0, 1], vertices: [0, 0, 40, 0, 40, 40, 0, 40], triangles: [0, 1, 2, 0, 2, 3], hull: 4 } },
+          },
+        },
+      ],
+      animations: {
+        lind: {
+          attachments: {
+            default: {
+              s: {
+                m: {
+                  deform: [
+                    { time: 0, offset: 0, vertices: [0, 0, 0, 0, 0, 0, 0, 0] },
+                    { time: 1, offset: 0, vertices: [10, 0, 0, -10, -10, 0, 0, 10] },
+                  ],
+                },
+              },
+            },
+          },
+        },
+        stepd: {
+          attachments: {
+            default: { s: { m: { deform: [{ time: 0, offset: 0, vertices: [0, 0, 0, 0, 0, 0, 0, 0], curve: "stepped" }, { time: 1, offset: 0, vertices: [8, 0, 0, -8, -8, 0, 0, 8] }] } } },
+          },
+        },
+        bezd: {
+          attachments: {
+            default: { s: { m: { deform: [{ time: 0, offset: 0, vertices: [0, 0, 0, 0, 0, 0, 0, 0], curve: [0.3, 0.5, 0.7, 0.9] }, { time: 1, offset: 0, vertices: [10, 0, 0, -10, -10, 0, 0, 10] }] } } },
+          },
+        },
+        late: { attachments: { default: { s: { m: { deform: [{ time: 0.5, offset: 0, vertices: [4, 0, 0, -4, -4, 0, 0, 4] }] } } } } },
+        partial: { attachments: { default: { s: { m: { deform: [{ time: 0, offset: 2, vertices: [5, -5] }] } } } } },
+        legacy: { deform: { s: [{ time: 0, offset: 0, vertices: [0, 0, 0, 0, 0, 0, 0, 0] }, { time: 1, offset: 0, vertices: [3, 0, 0, -3, -3, 0, 0, 3] }] } },
+      },
+    };
+    var rigidRes = core.parseModel(RIGID, atlas, { skin: "default" });
+    ok("含 deform 的模型解析成功", rigidRes.ok, rigidRes.issues);
+    if (!rigidRes.ok) return;
+    var rm = rigidRes.value;
+    var ranim = rm.animations.get("lind");
+    eq("deform 轨道已解析", ranim.deform.length, 1);
+    eq("anim.hasDeform 标记", ranim.hasDeform, true);
+    eq("capabilities：deform 已求值不再标 unsupported", rm.capabilities.unsupported.deform, false);
+    var ratt = null;
+    rm.attachments.forEach(function (a) {
+      if (a.id === "default/s/m") ratt = a;
+    });
+    ok("拿到 mesh 附件", !!ratt);
+    eq("刚性 mesh 偏移长度 = 2×顶点数", core.deformOffsetsLength(ratt), 8);
+
+    var p0 = core.evalPose(rm, { animation: "lind", time: 0, skin: "default" });
+    var pHalf = core.evalPose(rm, { animation: "lind", time: 0.5, skin: "default" });
+    var pFull = core.evalPose(rm, { animation: "lind", time: 1, skin: "default" });
+    var pAfter = core.evalPose(rm, { animation: "lind", time: 2.5, skin: "default" });
+    ok("首 key 处偏移 = 0（全零数组）", Array.from(p0.deform[0]).every(function (v) { return Math.abs(v) < 1e-12; }));
+    nearArray("线性中点 = 两端平均", Array.from(pHalf.deform[0]), [5, 0, 0, -5, -5, 0, 0, 5], 1e-9);
+    nearArray("末 key 取末值", Array.from(pFull.deform[0]), [10, 0, 0, -10, -10, 0, 0, 10], 1e-9);
+    nearArray("末 key 之后保持末值", Array.from(pAfter.deform[0]), [10, 0, 0, -10, -10, 0, 0, 10], 1e-9);
+
+    var pLate = core.evalPose(rm, { animation: "late", time: 0.25, skin: "default" });
+    ok("首 key 之前无偏移（deform 未定义）", pLate.deform[0] === undefined);
+    var pLate1 = core.evalPose(rm, { animation: "late", time: 0.75, skin: "default" });
+    nearArray("首 key 之后单 key 恒定", Array.from(pLate1.deform[0]), [4, 0, 0, -4, -4, 0, 0, 4], 1e-9);
+
+    var pStep = core.evalPose(rm, { animation: "stepd", time: 0.9, skin: "default" });
+    ok("stepped 段取前值（全零）", Array.from(pStep.deform[0]).every(function (v) { return Math.abs(v) < 1e-12; }));
+
+    var bezTrack = rm.animations.get("bezd").deform[0];
+    var bezPct = core.sampleDeformAt(bezTrack, 0.5);
+    ok("bezier 段采样可用", !!bezPct);
+    ok("bezier 百分比 ≠ 线性 0.5", Math.abs(bezPct[0] - 5) > 1e-3, "v0=" + bezPct[0]);
+    var pBez = core.evalPose(rm, { animation: "bezd", time: 0.5, skin: "default" });
+    near("evalPose 与 sampleDeformAt 一致（bezier）", pBez.deform[0][0], bezPct[0], 1e-12);
+
+    var pPartial = core.evalPose(rm, { animation: "partial", time: 0, skin: "default" });
+    nearArray("offset 起始位置生效", Array.from(pPartial.deform[0]), [0, 0, 5, -5, 0, 0, 0, 0], 1e-12);
+
+    var pLegacy = core.evalPose(rm, { animation: "legacy", time: 1, skin: "default" });
+    nearArray("旧式 deform.<slot> 轨道已求值", Array.from(pLegacy.deform[0]), [3, 0, 0, -3, -3, 0, 0, 3], 1e-9);
+
+    /* buildGeometry 必须把偏移喂给 skinMesh */
+    var itemsNoDeform = core.buildGeometry(rm, core.evalPose(rm, { animation: "lind", time: 0, skin: "default" }), {});
+    var itemsHalf = core.buildGeometry(rm, pHalf, {});
+    var manual = core.skinMesh(ratt, rm.slots[0].boneIndex, pHalf.world, pHalf.deform[0]);
+    nearArray("buildGeometry 顶点 = skinMesh(world, deform)", Array.from(itemsHalf[0].worldXY), Array.from(manual), 1e-9);
+    ok("形变确实改变顶点", Math.hypot(itemsHalf[0].worldXY[0] - itemsNoDeform[0].worldXY[0], itemsHalf[0].worldXY[1] - itemsNoDeform[0].worldXY[1]) > 1);
+    var manualNoDeform = core.skinMesh(ratt, rm.slots[0].boneIndex, pHalf.world);
+    ok("不传 deform 时结果与无形变一致", Math.hypot(manualNoDeform[0] - itemsNoDeform[0].worldXY[0], manualNoDeform[1] - itemsNoDeform[0].worldXY[1]) < 1e-9);
+
+    /* 加权 mesh：偏移按 influence 计（每 influence 2 个数） */
+    var WEIGHT = {
+      skeleton: { spine: "4.2.22" },
+      bones: [{ name: "root" }, { name: "A", parent: "root", rotation: 30, length: 100 }, { name: "B", parent: "root", x: 0, y: 50 }],
+      slots: [{ name: "s", bone: "A", attachment: "w" }],
+      skins: [
+        {
+          name: "default",
+          attachments: {
+            s: {
+              w: {
+                type: "mesh",
+                path: "mWeight",
+                uvs: [0, 0, 1, 0, 1, 1, 0, 1],
+                vertices: [1, 1, 0, 0, 1, 1, 2, 40, 0, 1, 2, 1, 0, 40, 0.5, 2, 40, 40, 0.5, 1, 2, 0, 0, 1],
+                triangles: [0, 1, 2, 0, 2, 3],
+                hull: 4,
+              },
+            },
+          },
+        },
+      ],
+      animations: {
+        wd: {
+          attachments: {
+            default: {
+              s: {
+                w: {
+                  deform: [
+                    { time: 0, offset: 0, vertices: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+                    { time: 1, offset: 0, vertices: [5, 0, 0, -5, 3, 3, -3, -3, 2, -2] },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    var wRes = core.parseModel(WEIGHT, atlas, { skin: "default" });
+    ok("加权 mesh 模型解析成功", wRes.ok, wRes.issues);
+    if (wRes.ok) {
+      var wm = wRes.value;
+      var watt = null;
+      wm.attachments.forEach(function (a) {
+        if (a.id === "default/s/w") watt = a;
+      });
+      ok("加权 mesh 被识别", !!watt && watt.weighted === true, "influences=" + (watt && watt.influences ? watt.influences.length : "-"));
+      eq("加权偏移长度 = 2×influence 数（5）", core.deformOffsetsLength(watt), 10);
+      var wp = core.evalPose(wm, { animation: "wd", time: 1, skin: "default" });
+      eq("加权 deform 长度", wp.deform[0].length, 10);
+      var wManual = core.skinMesh(watt, wm.slots[0].boneIndex, wp.world, wp.deform[0]);
+      var wItem = core.buildGeometry(wm, wp, {})[0];
+      nearArray("加权 mesh 顶点 = skinMesh(offsets)", Array.from(wItem.worldXY), Array.from(wManual), 1e-9);
+      var wNo = core.buildGeometry(wm, core.evalPose(wm, { animation: "wd", time: 0, skin: "default" }), {})[0];
+      ok("加权形变改变顶点", Math.hypot(wItem.worldXY[0] - wNo.worldXY[0], wItem.worldXY[1] - wNo.worldXY[1]) > 0.5);
+    }
+
+    /* region 角点顺序（官方 offset[0..7] = 我们 localXY 的 BL/TL/TR/BR） */
+    var REGION = {
+      skeleton: { spine: "4.2.22" },
+      bones: [{ name: "root" }, { name: "A", parent: "root", length: 100 }],
+      slots: [{ name: "s", bone: "A", attachment: "r" }],
+      skins: [{ name: "default", attachments: { s: { r: { type: "region", path: "mReg", x: 0, y: 0, width: 40, height: 40 } } } }],
+      animations: {
+        rd: {
+          attachments: {
+            default: { s: { r: { deform: [{ time: 0, offset: 0, vertices: [0, 0, 0, 0, 0, 0, 0, 0] }, { time: 1, offset: 0, vertices: [6, 0, 0, -4, -6, 0, 0, 4] }] } } },
+          },
+        },
+      },
+    };
+    var rRes = core.parseModel(REGION, atlas, { skin: "default" });
+    ok("region 形变模型解析成功", rRes.ok, rRes.issues);
+    if (rRes.ok) {
+      var regm = rRes.value;
+      var setupItem = core.buildGeometry(regm, core.evalPose(regm, { time: 0 }), {})[0];
+      var defItem = core.buildGeometry(regm, core.evalPose(regm, { animation: "rd", time: 1, skin: "default" }), {})[0];
+      var dm = defItem.worldXY;
+      /* A 骨 rotation 0、scale 1 → 世界位移 = 偏移本身 */
+      near("角点 0（BL）位移 x", dm[0] - setupItem.worldXY[0], 6, 1e-9);
+      near("角点 1（TL）位移 y", dm[3] - setupItem.worldXY[3], -4, 1e-9);
+      near("角点 2（TR）位移 x", dm[4] - setupItem.worldXY[4], -6, 1e-9);
+      near("角点 3（BR）位移 y", dm[7] - setupItem.worldXY[7], 4, 1e-9);
+    }
+
+    /* deform 与 IK 叠加：IK 先解算姿态，形变在同一 world 矩阵上叠加 */
+    var IKD = {
+      skeleton: { spine: "4.2.22" },
+      bones: [
+        { name: "root" },
+        { name: "P", parent: "root", rotation: 0, length: 100 },
+        { name: "C", parent: "P", x: 100, rotation: 0, length: 100 },
+        { name: "T1", parent: "root", x: 100, y: 100 },
+      ],
+      slots: [{ name: "s", bone: "C", attachment: "m" }],
+      skins: [{ name: "default", attachments: { s: { m: { type: "mesh", path: "mRigid", uvs: [0, 0, 1, 0, 1, 1, 0, 1], vertices: [0, 0, 40, 0, 40, 40, 0, 40], triangles: [0, 1, 2, 0, 2, 3], hull: 4 } } } }],
+      ik: [{ name: "ik-a", order: 0, bones: ["P", "C"], target: "T1", mix: 1, bendPositive: true }],
+      animations: {
+        ikd: {
+          attachments: {
+            default: { s: { m: { deform: [{ time: 0, offset: 0, vertices: [0, 0, 0, 0, 0, 0, 0, 0] }, { time: 1, offset: 0, vertices: [6, 0, 0, -6, -6, 0, 0, 6] }] } } },
+          },
+        },
+      },
+    };
+    var ikRes = core.parseModel(IKD, atlas, { skin: "default" });
+    ok("IK+deform 模型解析成功", ikRes.ok, ikRes.issues);
+    if (ikRes.ok) {
+      var ikm = ikRes.value;
+      var ikPose = core.evalPose(ikm, { animation: "ikd", time: 1, skin: "default" });
+      var cIdx = ikm.boneIndex.get("C");
+      ok("IK 已解算（C 局部角非 0）", Math.abs(ikPose.applied[cIdx].rotation) > 1, "rot=" + ikPose.applied[cIdx].rotation);
+      ok("IK 场景下 deform 仍有偏移", !!ikPose.deform[0] && Math.abs(ikPose.deform[0][0] - 6) < 1e-9);
+      var ikAtt = null;
+      ikm.attachments.forEach(function (a) {
+        if (a.id === "default/s/m") ikAtt = a;
+      });
+      var ikItem = core.buildGeometry(ikm, ikPose, {})[0];
+      var ikManual = core.skinMesh(ikAtt, ikm.slots[0].boneIndex, ikPose.world, ikPose.deform[0]);
+      nearArray("IK+deform 顶点 = skinMesh(IK world, offsets)", Array.from(ikItem.worldXY), Array.from(ikManual), 1e-9);
+      var ikNoDeform = core.skinMesh(ikAtt, ikm.slots[0].boneIndex, ikPose.world);
+      ok("IK 场景形变确实改变顶点", Math.hypot(ikItem.worldXY[0] - ikNoDeform[0], ikItem.worldXY[1] - ikNoDeform[1]) > 1);
+    }
+
+    /* 诚实性：transform / path 仍必须告警 */
+    var TF = {
+      skeleton: { spine: "4.2.22" },
+      bones: [{ name: "root" }],
+      slots: [],
+      skins: [{ name: "default", attachments: {} }],
+      transform: [{ name: "tc", bone: "root", target: "root", mixRotate: 0.5 }],
+      animations: { t: { transform: { tc: [{ time: 0, mixRotate: 0.5 }] } } },
+    };
+    var tfRes = core.parseModel(TF, atlas, { skin: "default" });
+    ok(
+      "transform 动画仍报 unsupported（诚实）",
+      tfRes.issues.some(function (i) {
+        return i.code === "animation.transform.unsupported";
+      }),
+      tfRes.issues.map(function (i) {
+        return i.code;
+      })
+    );
+    ok(
+      "模型级 transform/path 约束仍报 unsupported",
+      tfRes.issues.some(function (i) {
+        return i.code === "model.transform.unsupported";
+      })
+    );
+  }
+
   function run() {
     if (!core) {
       result.failures.push({ case: "(global)", name: "SpineCore 未加载", expected: "存在", actual: "缺失", detail: "" });
@@ -2337,6 +2935,11 @@
       runExtra();
     } catch (err) {
       record(false, "额外断言执行异常", "无异常", String(err && err.message ? err.message : err), String(err && err.stack));
+    }
+    try {
+      runDeform();
+    } catch (err) {
+      record(false, "deform 断言执行异常", "无异常", String(err && err.message ? err.message : err), String(err && err.stack));
     }
     try {
       runBundle();

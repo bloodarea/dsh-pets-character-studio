@@ -29,7 +29,7 @@
 - **事件映射**：为任务开始、运行中、完成、失败、待授权、会话切换、桌宠点击、休眠等语义事件绑定动画和语音。
 - **完整性与兼容性**：人物包格式版本、资源引用检查、哈希校验和运行时版本兼容声明。
 
-当前制作路线优先采用**帧序列动画**。Spine 骨骼动画方案已暂停并本地封存，**不属于当前首版支持范围**；未来是否恢复由实际需求决定。
+当前制作路线为**混合动画架构**：Spine 4.2 轻量骨架负责待机、眨眼与表情，`tools/character-editor/` 可直接载入 runtime JSON 查看与编辑骨骼、关键帧；**帧序列动画 + 预录语音**负责挥手、坐下、转身等复杂动作。两套共用同一角色、锚点与比例，切换用交叉淡入淡出（crossfade）。
 
 ### 2. 创作者制作工作流
 
@@ -90,21 +90,22 @@
 
 ## 当前仓库内容
 
-目前处于从 Spine 转向帧序列的过渡期；下列为现有内容，**不代表上述目标功能已经全部实现**。
+仓库当前按混合动画架构推进（Spine 轻量骨架 + 帧序列复杂动作）；下列为现有内容，**不代表上述目标功能已经全部实现**。
 
 | 目录 / 文件 | 当前用途或状态 |
 | --- | --- |
 | `.agents/skills/`（本地忽略） | 项目级本机技能与 API 网关配置，例如 `meta-api-imagegen`、`newapi-multimodal`；凭据不得入库 |
+| `skills/psd-tools/` | 随插件分发的公开技能：用 psd-tools 把 PSD/PSB 拆成带 Alpha 的 PNG 部件（`scripts/psd_parts.py` + `references/`） |
 | `scripts/verify-hygiene.sh`、`scripts/install-hooks.sh` | 提交卫生检查与本地钩子 |
 | `assets/characters/` | **发布区**：完整人物包（`<id>/`，含清单、资源、许可与署名）与下载索引 `index.json`；DSH Pets 从远端仓库下载 |
 | `workspace/texture2d-pack/`、`workspace/three-view-pack/`、`workspace/voice-pack/` | **生产区**（本地、不入库）：人物贴图/设定图、三视图与预录语音的制作输入 |
-| `references/ref-anime/`、`references/ref-texture2d/` | 本地参考：桌宠参考实现与角色图集参考；不入库 |
+| `references/ref-anime/`、`references/ref-texture2d/`、`references/psd-tools/` | 本地参考：桌宠参考实现、角色图集参考与 psd-tools 上游克隆；不入库 |
 | `output/` | 本机生成记录与验收证据，不入库 |
-| `tools/character-editor/` | 旧 Spine 编辑/预览工具（本地保留；帧序列管线跑通后再迁移或移除） |
+| `tools/character-editor/` | 现役**内置人物包管理器**：零依赖的 Spine 4.2 runtime JSON 查看/编辑工具（骨骼、关键帧与保存补丁），本地保留 |
 
-### Spine 历史方案
+### 混合动画架构
 
-Spine 管线已从仓库移除，不再维护；相关工具、参考项目与样例包只在开发者本地备份。当前只维护**帧序列动画 + 预录语音**路径。
+Spine 4.2 轻量骨架负责待机、眨眼与表情，内置人物包管理器（`tools/character-editor/`）直接载入 runtime JSON 查看与编辑骨骼、关键帧；**帧序列动画 + 预录语音**负责挥手、坐下、转身等复杂动作。两套共用同一角色、锚点与比例，切换用交叉淡入淡出（crossfade）。编辑器只处理运行时 JSON：不做 `.spine` 工程往返，也不导出二进制 `.skel`。
 
 ### 在 DSH 中加载 Character Studio
 
@@ -116,7 +117,7 @@ dsh plugin --profile <profile> add /path/to/dsh-pets-character-studio
 dsh plugin --profile <profile> remove dsh-pets-character-studio
 ```
 
-插件名与技能 provider 均为 `dsh-pets-character-studio`，由 `index.js` 注册 `skills/` 下的公开技能（当前 `skills/` 为空，随管线补齐）。`.agents/skills/` 仅用于本地配置，不属于公开分发内容。
+插件名与技能 provider 均为 `dsh-pets-character-studio`，由 `index.js` 注册 `skills/` 下的公开技能；当前随包技能为 `psd-tools`（PSD/PSB 拆件），依赖见 `requirements.txt`。`.agents/skills/` 仅用于本地配置，不属于公开分发内容。
 
 ### 提交卫生检查
 

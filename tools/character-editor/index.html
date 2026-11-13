@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>内置人物包管理器</title>
-<link rel="stylesheet" href="ui.css">
+<title>内置人物包管理器 0.3.0</title>
+<link rel="stylesheet" href="ui.css?v=0.9.168">
 </head>
 <body>
 
@@ -12,7 +12,7 @@
      自上而下：菜单条 → 视图/显示层条 → 画布+右栏 → 动画条 → 状态栏
      ===================================================================== -->
 <header class="topbar">
-  <!-- 菜单条：文件 / 编辑 / 视图 / 帮助 + 右侧标题 -->
+  <!-- 菜单条：文件 / 编辑 / 视图 / 帮助 + 文档名 + 未保存 + 撤销重做 + 保存 -->
   <div class="menubar" role="menubar" aria-label="菜单条">
     <div class="menu-wrap">
       <button id="btnMenuFile" class="menubtn" type="button" role="menuitem" aria-haspopup="true"
@@ -34,25 +34,28 @@
               aria-expanded="false" aria-controls="menuHelp">帮助</button>
       <div id="menuHelp" class="menu" role="menu" aria-label="帮助" hidden></div>
     </div>
+    <span class="vsep" aria-hidden="true"></span>
+    <!-- 文档身份：包名 + 未保存标记（原 #simpleTop 的等价物，单一界面） -->
+    <span id="docName" class="doc-name" title="当前人物包">未打开人物包</span>
+    <span id="docUnsaved" class="doc-unsaved" hidden>● 未保存</span>
     <span class="spacer" aria-hidden="true"></span>
+    <button id="btnUndoTop" class="btn btn-sm" type="button" disabled title="撤销（Ctrl+Z）">↶</button>
+    <button id="btnRedoTop" class="btn btn-sm" type="button" disabled title="重做（Ctrl+Shift+Z）">↷</button>
+    <button id="btnSaveTop" class="btn btn-sm primary" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="saveMenuTop" title="保存（Ctrl+S）：下载副本或写回原包">保存 ▾</button>
+    <div id="saveMenuTop" class="menu" role="menu" aria-label="保存" hidden></div>
     <span class="app-title">内置人物包管理器</span>
   </div>
 
-  <!-- 视图 / 显示层条（一行；<960px 允许换行但不横向溢出） -->
+  <!-- ===== task-42：恢复两排顶部控制条（用户要求）。元素只有一份，id 唯一 ===== -->
+  <!-- 第 1 排：视图 / 显示层 -->
+  <!-- 右栏双向开关（0.9.9）：钉在第 1 排最右端，只有图标、不带文字。
+       位置用 CSS 绝对定位（#btnPanel 在 .bar-view 内），不是 flex 子项——
+       第 1 排是 flex-wrap，塞成子项会在 1024px 下被换行挤到下一行左侧。 -->
   <div class="bar bar-view" role="toolbar" aria-label="视图与显示层">
-    <button id="btnFit" class="btn" type="button" disabled title="适配全部（F）；Shift+F 适配选中">
-      <svg class="ic" aria-hidden="true"><use href="#i-fit"></use></svg><span>适配</span><kbd>F</kbd>
+    <button id="btnPanel" class="btn btn-icon panel-toggle" type="button" aria-pressed="true"
+            aria-controls="inspector" title="隐藏右侧面板（右栏）">
+      <svg class="ic" aria-hidden="true"><use href="#i-panel"></use></svg>
     </button>
-    <div class="zoomgrp" role="group" aria-label="缩放">
-      <button id="btnZoomOut" class="btn btn-icon" type="button" disabled title="缩小（-）">
-        <svg class="ic" aria-hidden="true"><use href="#i-zoom-out"></use></svg>
-      </button>
-      <span id="zoomLabel" class="zoom-val mono dim" title="当前缩放">—</span>
-      <button id="btnZoomIn" class="btn btn-icon" type="button" disabled title="放大（+）">
-        <svg class="ic" aria-hidden="true"><use href="#i-zoom-in"></use></svg>
-      </button>
-    </div>
-    <span class="vsep" aria-hidden="true"></span>
     <div class="layers" role="group" aria-label="显示层（可多选）">
       <label class="layer" title="显示角色贴图；贴图只影响显示，不勾也能选中/拖动部件">
         <input type="checkbox" data-layer="texture" checked><svg class="ic" aria-hidden="true"><use href="#i-texture"></use></svg><span>贴图</span>
@@ -67,51 +70,127 @@
         <input type="checkbox" data-layer="weights"><svg class="ic" aria-hidden="true"><use href="#i-weight"></use></svg><span>权重</span>
       </label>
     </div>
-    <label class="toggle" title="吸附：拖动时取整到 1 个单位（默认关闭）">
-      <input id="snapChk" type="checkbox"><svg class="ic" aria-hidden="true"><use href="#i-magnet"></use></svg>
-      <span>吸附</span><span id="snapState" class="state">关闭</span>
-    </label>
-    <label class="pick" id="weightModeWrap" hidden title="权重层配色：按骨配色 / 只看选中骨的热力">
-      <span class="lbl">权重配色</span>
-      <select id="weightMode" aria-label="权重层配色">
-        <option value="bone">按骨配色</option>
-        <option value="heat">选中骨热力</option>
-      </select>
-    </label>
     <label class="alpha" title="贴图不透明度：叠加调试层时默认降到 35%">
-      <span class="lbl">贴图强度</span>
-      <input id="texAlpha" type="range" min="0" max="100" step="1" value="100" aria-label="贴图强度">
+      <span class="lbl">透明度</span>
+      <input id="texAlpha" type="range" min="0" max="100" step="1" value="100" aria-label="透明度">
       <span id="texAlphaV" class="val mono">100%</span>
     </label>
-    <!-- 载入只接受一个 index.json（契约 §2.2）；模型/图集/贴图由索引读取 -->
-    <input id="files" type="file" accept=".json" hidden>
-    <!-- 语音包：期望文件名 index.json；手动选择不继承包根（契约 §2.1 / Lead 裁决 2） -->
-    <input id="voiceFiles" type="file" accept=".json,application/json" hidden>
-    <!-- 面板开关：视图条最右端，只负责「展开」；面板内顶部有「收起」（窄屏抽屉同理） -->
-    <button id="btnPanel" class="btn panel-open-btn" type="button" aria-pressed="false" aria-controls="inspector" title="展开右侧面板（窄屏为抽屉）">
-      <svg class="ic" aria-hidden="true"><use href="#i-panel"></use></svg><span>展开</span>
-    </button>
+    <span id="displayBadge" class="edit-badge display-badge" hidden></span>
   </div>
+
+  <!-- 第 2 排（编辑工具）已按要求移除（0.9.13）：整行 UI 去掉，但底层能力全部保留——
+       目标 / 坐标 / 文档模式 / AutoKey / 轴心补偿 / IK / 镜像仍可通过
+       __characterEditor.setTarget() / setSpace() / setMode() / setAutoKey() /
+       setPivotCompensate() / setIkMode() / setIkMix() / mirrorRun() 调用。
+       隐藏的等价控件（供脚本与无障碍兜底）保留在下方 form 里，不占版面。 -->
+  <form id="hiddenToolControls" hidden aria-hidden="true" style="display:none">
+    <select id="editTarget" aria-label="操作目标"><option value="bone" selected>骨骼</option><option value="attachment">部件</option></select>
+    <select id="editSpace" aria-label="坐标系"><option value="parent" selected>Parent</option><option value="world">World</option><option value="local">Local</option></select>
+    <select id="editMode" aria-label="文档模式"><option value="setup">绑定姿态</option><option value="animate" selected>动画</option></select>
+    <div id="docModeInline" role="group" aria-label="文档模式">
+      <button id="docModeSetup" type="button" aria-pressed="false">绑定姿态</button>
+      <button id="docModeAnimate" type="button" aria-pressed="true">动画</button>
+    </div>
+    <input id="autoKeyChk" type="checkbox">
+    <div id="pivotCompWrap"><input id="pivotCompChk" type="checkbox"></div>
+    <label id="ikWrap"><input id="ikModeChk" type="checkbox"></label>
+    <div id="ikMixWrap"><input id="ikMix" type="range" min="0" max="100" step="1" value="100"><span id="ikMixV">1.00</span></div>
+    <span id="ikInfo"></span>
+    <button id="btnMirrorBone" type="button">镜像骨</button>
+    <button id="btnMirrorAll" type="button">镜像动画</button>
+    <span id="mirrorPending"></span>
+    <button id="btnMirrorWrite" type="button" disabled>写入镜像</button>
+    <span id="editBadge"></span>
+    <span id="editGate"></span>
+    <!-- 吸附 / 洋葱皮 / 轨迹 / 权重配色：0.9.14 起从顶部工具条移除（界面更简），
+         但能力保留——吸附仍可从「视图 → 吸附」勾选，三项也都能用
+         __characterEditor.setSnap() / setOnion() / setTrail() / setWeightMode() 调用。 -->
+    <label id="snapWrap"><input id="snapChk" type="checkbox"><span id="snapState">关闭</span></label>
+    <label id="onionWrap"><input id="onionChk" type="checkbox"></label>
+    <label id="onionRange"><input id="onionBefore" type="number" value="1"><input id="onionAfter" type="number" value="1"><input id="onionStep" type="number" value="1"></label>
+    <label id="trailWrap"><input id="trailChk" type="checkbox"></label>
+    <label id="weightModeWrap"><select id="weightMode"><option value="bone">按骨配色</option><option value="heat">选中骨热力</option></select></label>
+  </form>
+  <!-- v3.2 起入口是包根 manifest.json，路径为包根相对；单文件拿不到包根，
+       所以「载入文件…」默认弹**目录**选择器（方案 A）。单文件入口保留给旧包与语音包。 -->
+  <input id="files" type="file" accept=".json" hidden>
+  <input id="filesDir" type="file" webkitdirectory directory multiple hidden>
+  <!-- 语音包：期望文件名 index.json；手动选择不继承包根（契约 §2.1 / Lead 裁决 2） -->
+  <input id="voiceFiles" type="file" accept=".json,application/json" hidden>
 </header>
 
 <main>
+  <!-- 左侧竖向工具条（PS/Blender 心智）：选择 / 移动 V / 旋转 R / 缩放 S / 平移 / 缩放视图。
+       0.9.5：加伸缩开关 #railToggle——收起态只有图标（title 保留完整说明），展开态显示工具名称。 -->
+  <div id="toolRail" class="tool-rail" role="toolbar" aria-label="工具" data-expanded="false">
+    <button id="railToggle" class="rail-btn rail-toggle" type="button" aria-pressed="false"
+            aria-expanded="false" aria-controls="toolRail" title="展开工具条：显示工具名称">
+      <svg class="ic" aria-hidden="true"><use href="#i-panel"></use></svg>
+      <svg class="ic rail-chev" aria-hidden="true"><use href="#i-chevron-right"></use></svg>
+      <span class="rail-label">工具</span>
+    </button>
+    <span class="rail-group-title" aria-hidden="true"><span class="rail-group-text">操作</span></span>
+    <span class="rail-sep" aria-hidden="true"></span>
+    <button id="railSelect" class="rail-btn" type="button" aria-pressed="false" title="选择（Q）：点选部位，只选中不移动；影响：选中哪个部位（不改数据）">
+      <svg class="ic" aria-hidden="true"><use href="#i-target"></use></svg><span class="rail-k">Q</span><span class="rail-label">选择</span>
+    </button>
+    <button id="btnToolPan" class="rail-btn" type="button" aria-pressed="false" aria-label="拖拽工具" title="拖拽（H）：点一下进入拖拽模式（画布左键拖动=移动视野，不碰部件）；再点一下或再按 H 退出，回到进入前的工具。按住 Space / 中键拖动是临时拖拽，松手即恢复">
+      <svg class="ic" aria-hidden="true"><use href="#i-hand"></use></svg><span class="rail-k">H</span><span class="rail-label">拖拽</span>
+    </button>
+    <button id="btnToolMove" class="rail-btn" type="button" aria-pressed="true" title="移动（V / G）：拖动画布移动选中部位；影响：该部位的位移（动画模式自动打位置关键帧）">
+      <svg class="ic" aria-hidden="true"><use href="#i-move"></use></svg><span class="rail-k">V</span><span class="rail-label">移动</span>
+    </button>
+    <button id="btnToolRotate" class="rail-btn" type="button" aria-pressed="false" title="旋转（R）：拖动旋转选中部位；影响：该部位的旋转角度">
+      <svg class="ic" aria-hidden="true"><use href="#i-reset"></use></svg><span class="rail-k">R</span><span class="rail-label">旋转</span>
+    </button>
+    <button id="btnToolScale" class="rail-btn" type="button" aria-pressed="false" title="缩放（S）：拖动缩放选中部位；影响：该部位的缩放">
+      <svg class="ic" aria-hidden="true"><use href="#i-pivot"></use></svg><span class="rail-k">S</span><span class="rail-label">缩放</span>
+    </button>
+    <button id="btnToolPose" class="rail-btn" type="button" aria-pressed="false" title="指向（W）：让选中部位朝向光标；影响：该部位的旋转角度">
+      <svg class="ic" aria-hidden="true"><use href="#i-joint"></use></svg><span class="rail-k">W</span><span class="rail-label">指向</span>
+    </button>
+    <span class="rail-group-title" aria-hidden="true"><span class="rail-group-text">视图控制</span></span>
+    <span class="rail-sep" aria-hidden="true"></span>
+    <button id="btnZoomInRail" class="rail-btn" type="button" title="放大（+ / 滚轮）：只改视野缩放；影响：不改数据">
+      <svg class="ic" aria-hidden="true"><use href="#i-zoom-in"></use></svg><span class="rail-k">+</span><span class="rail-label">放大</span>
+    </button>
+    <button id="btnZoomOutRail" class="rail-btn" type="button" title="缩小（- / 滚轮）：只改视野缩放；影响：不改数据">
+      <svg class="ic" aria-hidden="true"><use href="#i-zoom-out"></use></svg><span class="rail-k">−</span><span class="rail-label">缩小</span>
+    </button>
+    <button id="btnFitRail" class="rail-btn" type="button" title="适应窗口（F；Shift+F 只看选中）：把整个角色缩放到画布内；只改视野，不改数据">
+      <svg class="ic" aria-hidden="true"><use href="#i-fit"></use></svg><span class="rail-k">F</span><span class="rail-label">适应窗口</span>
+    </button>
+  </div>
+
   <div id="stage" class="stage">
-    <canvas id="cv" aria-label="角色画布：拖动部件移动，滚轮缩放，按住 Space 或中键拖动平移"></canvas>
+    <canvas id="cv" aria-label="角色画布：拖动部件移动，滚轮缩放，按住 Space 或中键拖动拖拽视野"></canvas>
+    <!-- 画布角不再放按钮：缩放与「适应窗口」在左侧工具条（0.9.16 起顶部缩放组也已移除） -->
 
     <!-- 空状态：未载入 -->
     <div id="emptyState" class="stage-overlay">
       <div class="card">
         <h1>内置人物包管理器</h1>
-        <p>载入索引文件（index.json）；模型、图集与全部贴图由索引在同一目录读取，先看姿势，再微调摆位。</p>
+        <p>载入入口文件（v3.2 为 <code>manifest.json</code>）；模型、图集与全部贴图由它按包根相对路径读取，先看姿势，再微调摆位。</p>
+        <!-- 载入路径：服务端起好后，填仓库相对路径让编辑器自己去 fetch（不是上传文件） -->
+        <div class="path-load">
+          <label for="packPathInput" class="path-load-lbl">载入路径</label>
+          <div class="path-load-row">
+            <input id="packPathInput" class="path-load-input" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="workspace/packs/deepseek 或 …/manifest.json"
+                   aria-describedby="packPathHint">
+            <button id="btnLoadPath" class="btn primary" type="button">打开</button>
+          </div>
+          <p id="packPathHint" class="path-load-hint">仓库相对路径；填包目录会自动补 <code>manifest.json</code>。需要已起本地服务（<code>start.bat</code>）。</p>
+        </div>
         <div class="actions">
-          <button id="btnEmptyLoad" class="btn primary" type="button">
-            <svg class="ic" aria-hidden="true"><use href="#i-open"></use></svg><span>载入文件</span>
+          <button id="btnEmptyLoad" class="btn" type="button">
+            <svg class="ic" aria-hidden="true"><use href="#i-open"></use></svg><span>选包目录（离线）</span>
           </button>
           <button id="btnEmptyExample" class="btn" type="button">
             <svg class="ic" aria-hidden="true"><use href="#i-sample"></use></svg><span>查看示例</span>
           </button>
         </div>
-        <p class="foot">也可以把 index.json 拖进画布 · 载入后拖动部件即可摆位</p>
+        <p class="foot">两条路：<b>载入路径</b>（走本地服务读取，推荐） · <b>选包目录</b>（把整个目录读进浏览器，不需要服务）</p>
       </div>
     </div>
 
@@ -146,18 +225,26 @@
   </div>
 
   <aside id="inspector" class="inspector" aria-label="部件与检查器">
-    <div class="inspector-bar">
-      <div class="inspector-tabs" role="tablist" aria-label="侧栏分页">
-        <button id="tabParts" class="inspector-tab" type="button" role="tab" aria-selected="true" aria-controls="partsView">部件</button>
-        <button id="tabEvents" class="inspector-tab" type="button" role="tab" aria-selected="false" aria-controls="eventPanel">
-          <span>事件</span><span id="eventTabBadge" class="tab-badge" hidden>0</span>
-        </button>
-      </div>
-      <span class="spacer"></span>
-      <button id="btnPanelClose" class="btn btn-sm" type="button" title="收起右侧面板（窄屏关闭抽屉）">
-        <svg class="ic" aria-hidden="true"><use href="#i-panel"></use></svg><span>收起</span>
+    <!-- 0.9.17：标题栏的 X 已移除（用户要求）。右栏关闭走顶部第 1 排的双向开关
+         #btnPanel，或「视图 → 面板」。这里原来那条 inspector-bar 只剩一个 X 和一个 spacer，
+         删掉 X 后整条就成了只有下边框的空条，一并移除。 -->
+    <!-- task-7：inspector 主分页（部件 / 事件 / 表情 / 动画）。
+         原「更多面板」折叠区已并入这里；DOM 仍是同一份，id 全部保留。 -->
+    <div class="inspector-tabs inspector-main-tabs" role="tablist" aria-label="侧栏主分页">
+      <button id="tabParts" class="inspector-tab" type="button" role="tab" aria-selected="true" aria-controls="partsView">
+        <span>部件</span>
+      </button>
+      <button id="tabEvents" class="inspector-tab" type="button" role="tab" aria-selected="false" aria-controls="eventPanel">
+        <span>台词</span><span id="eventTabBadge" class="tab-badge" hidden>0</span>
+      </button>
+      <button id="tabExpr" class="inspector-tab" type="button" role="tab" aria-selected="false" aria-controls="exprPanel">
+        <span>表情</span><span id="exprTabBadge" class="tab-badge" hidden>0</span>
+      </button>
+      <button id="tabAnim" class="inspector-tab" type="button" role="tab" aria-selected="false" aria-controls="animPanel">
+        <span>动画</span><span id="animTabBadge" class="tab-badge" hidden>0</span>
       </button>
     </div>
+
     <div id="partsView" class="parts-view" role="tabpanel" aria-labelledby="tabParts">
     <section class="panel panel-list">
       <header class="panel-hd">
@@ -180,127 +267,105 @@
       <div id="list" class="slot-list" role="listbox" aria-label="部件列表，上方在前"></div>
     </section>
 
-    <section class="panel panel-inspector" aria-label="选中部件检查器">
-      <header class="panel-hd">
-        <h2>选中</h2><span class="spacer"></span>
-        <span id="selBadge" class="count">—</span>
-      </header>
-      <p id="selEmpty" class="empty-note">点击画布或列表选择部件。选中后这里显示绑定骨、局部坐标与层级操作。</p>
-      <div id="selBody" hidden>
-        <div class="sel-head">
-          <div class="sel-title">
-            <span id="selName" class="name">—</span>
-            <span id="selSlot" class="slot">slot:—</span>
-          </div>
-          <div class="sel-actions">
-            <button id="btnSelVisible" class="btn btn-icon btn-sm" type="button" aria-pressed="false" title="显示/隐藏该部件（H）">
-              <svg class="ic" aria-hidden="true"><use href="#i-eye"></use></svg>
-            </button>
-            <button id="btnSelLock" class="btn btn-icon btn-sm" type="button" aria-pressed="false" title="锁定：只影响查看器，不写入 JSON">
-              <svg class="ic" aria-hidden="true"><use href="#i-lock"></use></svg>
-            </button>
-          </div>
+    <!-- 0.9.50：原「属性与选中部件检查器」整块（标题 + 选中徽标 + 附件/骨骼/选中部件三个检查器
+         + 骨架结构面板）按用户要求从界面移除。能力全部保留，全部有等价接口：
+           · 选槽 / 选骨   → selectSlot(indexOrName) / slotSelection() / selectBone(indexOrName)
+           · 显示/隐藏/锁定 → slotVisible(i) / slotLock(i)
+           · 位置/旋转/缩放 → setBoneField(field,value) / boneField(field)（槽位走 selection + 画布手势）
+           · 层操作       → layerMove("up"|"down"|"top"|"bottom")（快捷键 [ ] 仍在）
+           · 恢复         → slotRestore(i) / attachmentRestore()
+           · 打键         → K / keySelected(fields) / btnBoneKey 仍在时间轴浮层
+           · 骨架结构     → skelCreate / skelDelete / skelReparent / skelRename / skelValidate / skeleton()
+           · 轴心/镜像    → pivot() / setPivotCompensate() / mirror() / mirrorRun() / mirrorPose()
+         选中状态本身仍是 state.sel，画布拾取与列表点击照旧写入它。 -->
+
+    <!-- task-42：原「更多」分区里的显示层 / 贴图强度已移到顶部视图条（目标 / 坐标 / 轴心 / IK / 镜像自 0.9.13 起不再有界面控件，能力仍由接口提供），
+         这里不再保留第二份。 -->
+    <!-- 0.9.49：原「片段库」整块（片段保存/插入/重命名、插入冲突策略、Setup 姿态预设保存/应用/镜像应用）
+         按用户要求从界面移除。localStorage 数据（dsh.character-editor.clips）与全部能力保留：
+           · 片段   → __characterEditor.clips() / clipSave() / clipInsert() / clipRename() / clipDelete()
+           · 冲突   → __characterEditor.clipCollision("overwrite"|"skip")
+           · 姿态   → __characterEditor.poseSave() / poseApply(id, mirrored) / poseDelete()
+         注意：原 DOM 里 #clipSection 的 <section> 一直没有闭合（本文件 section 开合比 16:15），
+         那段以 </div> 收尾其实多闭了一个 div。本次一并修正为平衡（section 16:16、div 148:148）。 -->
+    <!-- 0.9.50：原「调试」面板整块（骨骼/IK 图例、网格、权重图例、未求值明细、表情三滑杆与预设）
+         按用户要求从界面移除。它的内容全是 syncDebug() 里现场拼的字符串，state 里没有现成字段，
+         所以补了 __characterEditor.diagnostics() 作为结构化出口（同一批数据源）。
+         表情滑杆那一段本来就是 disabled 的占位（spine 没有独立表情参数类型），能力走「表情」分页。 -->
+    </div><!-- /#partsView -->
+
+    <!-- 表情分页：差分试装调试（纯预览覆盖，不写模型） -->
+    <section id="exprPanel" class="expr-panel" role="tabpanel" aria-labelledby="tabExpr" hidden>
+      <!-- 0.9.20：顶部「模式 / events.json 状态 / 提示 / 重置」整块按用户要求从界面移除。
+           能力全部保留：这些控件仍在 DOM 里（#exprMode / #exprMetaState / #exprHint /
+           #exprReset / #exprApplied / #exprWarn），只是不显示；exprResetToSetup() 仍可经
+           __characterEditor.exprReset() 调用，「覆盖 N 槽」也仍在状态快照里。 -->
+      <div class="expr-top" hidden aria-hidden="true" style="display:none">
+        <div class="expr-row-line">
+          <span class="k">模式</span>
+          <span id="exprMode" class="expr-mode" data-mode="normal">normal</span>
+          <span class="spacer"></span>
+          <span id="exprMetaState" class="expr-meta dim">未读 events.json</span>
         </div>
-        <dl class="kv">
-          <dt>绑定骨</dt><dd id="selBone">—</dd>
-          <dt>类型</dt><dd id="selType">—</dd>
-          <dt>可编辑</dt><dd id="selEditable">—</dd>
-        </dl>
-        <div class="field-grid">
-          <label for="posX">X<input id="posX" type="number" step="1" disabled></label>
-          <label for="posY">Y<input id="posY" type="number" step="1" disabled></label>
-        </div>
-        <p class="coord-note">父骨局部坐标，Y 向上 · 方向键 1（Shift ×10）</p>
-        <div class="xform-row">
-          <label for="rotX">旋转°<input id="rotX" type="number" step="1" disabled></label>
-          <input id="rotRange" type="range" min="-180" max="180" step="1" value="0" disabled aria-label="旋转滑杆">
-        </div>
-        <div class="field-grid field-grid-2">
-          <label for="scaleX">缩放 X<input id="scaleX" type="number" step="0.05" min="0.01" disabled></label>
-          <label for="scaleY">缩放 Y<input id="scaleY" type="number" step="0.05" min="0.01" disabled></label>
-        </div>
-        <p class="coord-note">旋转/缩放同样写父骨局部值，撤销覆盖；拖动只改 X/Y。</p>
-        <div class="row-actions">
-          <button id="btnLayerUp" class="btn btn-sm" type="button" disabled title="上移一层（更靠前，]）">
-            <svg class="ic" aria-hidden="true"><use href="#i-layer-up"></use></svg><span>上移</span>
+        <p id="exprHint" class="expr-hint dim">载入人物包后在这里试装表情差分；覆盖只作用于预览，不写模型。</p>
+        <div class="expr-actions">
+          <button id="exprReset" class="btn btn-sm" type="button" disabled title="清除全部预览覆盖，回到绑定姿态/默认附件">
+            <svg class="ic" aria-hidden="true"><use href="#i-reset"></use></svg><span>重置为默认</span>
           </button>
-          <button id="btnLayerDown" class="btn btn-sm" type="button" disabled title="下移一层（更靠后，[）">
-            <svg class="ic" aria-hidden="true"><use href="#i-layer-down"></use></svg><span>下移</span>
-          </button>
-          <button id="btnLayerTop" class="btn btn-sm" type="button" disabled title="置顶（最前）">
-            <svg class="ic" aria-hidden="true"><use href="#i-layer-front"></use></svg><span>置顶</span>
-          </button>
-          <button id="btnLayerBottom" class="btn btn-sm" type="button" disabled title="置底（最后）">
-            <svg class="ic" aria-hidden="true"><use href="#i-layer-back"></use></svg><span>置底</span>
-          </button>
-          <button id="btnRestoreSlot" class="btn btn-sm" type="button" disabled title="把这个部件恢复到刚载入时的位置">
-            <svg class="ic" aria-hidden="true"><use href="#i-reset"></use></svg><span>恢复该部件</span>
-          </button>
+          <span class="spacer"></span>
+          <span class="expr-count dim" id="exprApplied">覆盖 0 槽</span>
         </div>
-        <p id="selReason" class="reason" hidden></p>
-        <div id="influences" class="influences" hidden>
-          <div>由多根骨骼共同控制：</div>
-          <ul id="influenceList"></ul>
-        </div>
+        <div id="exprWarn" class="expr-warn" hidden></div>
+      </div>
+      <div id="exprBody" class="expr-body">
+        <p id="exprEmpty" class="empty-note">未载入模型：载入 manifest.json（v3.2）后按槽列出可用差分附件。</p>
+        <section id="exprSetsWrap" class="expr-section" hidden>
+          <h3>事件表情 <span id="exprSetCount" class="count">0</span></h3>
+          <p class="expr-note">来自包内 events.json：点击应用该事件的 7 个语义部位（左眼/右眼/眉毛_左/眉毛_右/眨眼_左/眨眼_右/嘴巴），并强制眼睛互斥。</p>
+          <div id="exprSets" class="expr-sets" role="group" aria-label="事件表情"></div>
+        </section>
+        <section id="exprSlotsWrap" class="expr-section" hidden>
+          <h3>按槽附件 <span id="exprSlotCount" class="count">0</span></h3>
+          <p class="expr-note">点击即覆盖该槽附件（仅预览）。「整眼」与眨眼三槽（眼白/眼珠/睫毛）互斥，同一时刻最多一套眼睛可见。</p>
+          <div id="exprSlots" class="expr-slots"></div>
+        </section>
+      </div>
+      <!-- 事件表情保存（0.9.26 / 0.9.29 常驻）：只写回 events.json 里**当前选中事件**的
+           expression，与顶栏「保存文件」（写模型/图集/贴图）是两条独立链路。
+           放在 #exprPanel 直属层、**不在 #exprBody 滚动区内** —— 否则要滚到底才看得见。 -->
+      <div id="exprSaveBar" class="expr-savebar">
+        <button id="exprSave" class="btn btn-sm primary" type="button" disabled
+                title="把当前预览的表情写回 events.json（只改当前事件的 expression，其余事件不动）">
+          <svg class="ic" aria-hidden="true"><use href="#i-save"></use></svg><span>保存表情到事件</span>
+        </button>
+        <span id="exprSaveTarget" class="expr-save-target dim">未选中事件</span>
+        <span id="exprSaveState" class="expr-save-state" hidden></span>
       </div>
     </section>
 
-    <div id="debug" class="panel debug">
-      <button id="debugToggle" class="debug-summary" type="button" aria-expanded="false" aria-controls="debugBody">
-        <svg class="ic caret" aria-hidden="true"><use href="#i-chevron-right"></use></svg>
-        <span>调试</span><span class="dim">骨骼 / 网格 / 权重 / 表情</span>
-        <span class="spacer"></span>
-        <span id="diagBadge" class="badge-num" hidden>0</span>
-      </button>
-      <div id="debugBody" class="debug-body" hidden>
-        <section>
-          <h3>骨骼 / IK</h3>
-          <div id="boneLegend" class="legend"></div>
-          <p id="boneNote">载入后显示骨骼数与约束状态。</p>
+    <!-- 动画分页：时长 / 关键帧编辑（写回 model.json.animations） -->
+    <section id="animPanel" class="anim-panel" role="tabpanel" aria-labelledby="tabAnim" hidden>
+      <div class="anim-top">
+        <div id="animWarn" class="expr-warn" hidden></div>
+      </div>
+      <div id="animBody" class="anim-body">
+        <p id="animEmpty" class="empty-note">未载入动画：载入含 animations 的 model.json 后显示待机动画。</p>
+        <!-- Spine 待机区：结构与下方「序列帧 · 复杂动作」完全一致 —— h3 小标题 + 列表条目。
+             0.9.78：原 `select#animEditSel` 下拉框改为纯列表行，两区视觉与交互统一。 -->
+        <section id="animIdleWrap" class="anim-section" hidden>
+          <h3>Spine · 待机动作 <span id="animIdleCount" class="count">0</span></h3>
+          <div id="animIdleList" class="anim-tracks"></div>
         </section>
-        <section>
-          <h3>网格</h3>
-          <p id="meshNote">载入后显示网格与 UV 状态。</p>
-        </section>
-        <section>
-          <h3>权重</h3>
-          <div id="legend" class="legend"></div>
-          <p id="weightsNote">载入后显示权重归属说明。</p>
-        </section>
-        <section>
-          <h3>表情参数（仅调试，不写回）</h3>
-          <div class="expr-row">
-            <span class="k">眨眼</span>
-            <input id="exBlink" type="range" min="0" max="1" step="0.01" value="0" aria-label="眨眼">
-            <span id="exBlinkV" class="val">0.00</span>
-          </div>
-          <div class="expr-row">
-            <span class="k">口型</span>
-            <input id="exMouth" type="range" min="0" max="4" step="1" value="0" aria-label="口型">
-            <span id="exMouthV" class="val">0</span>
-          </div>
-          <div class="expr-row">
-            <span class="k">眉毛</span>
-            <input id="exBrow" type="range" min="-1" max="1" step="0.5" value="0" aria-label="眉毛">
-            <span id="exBrowV" class="val">0</span>
-          </div>
-          <div class="presets" style="margin-top:6px">
-            <button class="btn btn-sm" type="button" data-preset="neutral">中性</button>
-            <button class="btn btn-sm" type="button" data-preset="happy">开心</button>
-            <button class="btn btn-sm" type="button" data-preset="sad">难过</button>
-            <button class="btn btn-sm" type="button" data-preset="surprised">惊讶</button>
-          </div>
-          <p id="exprAvail">载入后检测表情槽位。</p>
-        </section>
-        <section id="issueWrap" hidden>
-          <h3>未求值 / 诊断明细</h3>
-          <ul id="issueList" class="issue-list"></ul>
+        <!-- 序列帧（复杂动作）区：只读，数据来自 catalog.registries.sequence / sequences/index.json。
+             这一层与 Spine 无关，明确分区避免把两类动画混为一谈。 -->
+        <section id="animSeqWrap" class="anim-section" hidden>
+          <h3>序列帧 · 复杂动作 <span id="animSeqCount" class="count">0</span></h3>
+          <div id="animSeqList" class="anim-tracks"></div>
         </section>
       </div>
-    </div>
-    </div><!-- /#partsView -->
+    </section>
 
-    <!-- 事件分页（契约 §2.2；右侧 320px 单栏，不再用弹窗） -->
+    <!-- 台词分页（原「事件」页；契约 §2.2；右侧单栏，不再用弹窗） -->
     <section id="eventPanel" class="event-panel" role="tabpanel" aria-labelledby="tabEvents" hidden>
       <!-- 手动选择索引（无包根）时：提示 + 包根输入 -->
       <div id="voiceRootHost" class="voice-root-host" hidden></div>
@@ -319,7 +384,7 @@
       <div class="voice-summary">
         <span id="voiceSummaryText" class="voice-summary-text" aria-live="polite">未载入语音包</span>
         <div class="voice-tools">
-          <select id="voiceStatusFilter" aria-label="按状态筛选事件" title="按状态筛选事件">
+          <select id="voiceStatusFilter" aria-label="按状态筛选台词" title="按状态筛选台词">
             <option value="all">全部</option>
             <option value="audio-missing">仅语音缺失</option>
             <option value="anim-unmapped">仅动画未映射</option>
@@ -335,7 +400,7 @@
       <div class="event-search">
         <div class="search-wrap">
           <svg class="ic" aria-hidden="true"><use href="#i-search"></use></svg>
-          <input id="voiceSearch" type="search" placeholder="搜索事件 / 台词 id / 原文 / 动画" autocomplete="off" aria-label="搜索语音事件">
+          <input id="voiceSearch" type="search" placeholder="搜索台词 / 原文 / 动画" autocomplete="off" aria-label="搜索台词">
           <span id="voiceSearchCount" class="search-count" hidden></span>
         </div>
         <div id="voiceChips" class="chips" role="group" aria-label="按分类筛选"></div>
@@ -364,15 +429,15 @@
   </aside>
 </main>
 
-<!-- 动画条：整行，位于状态栏上方 -->
+<!-- 动画条：整行。**放在 #dopesheet 之前** —— 时间轴折叠时它贴着状态栏（看起来在底部），
+     展开时它位于时间轴面板**上方**（用户要求，0.9.83） -->
 <div class="bar bar-anim" role="toolbar" aria-label="动画预览">
   <div class="grp">
-    <label class="lbl" for="animSel">动画</label>
-    <select id="animSel" disabled>
-      <option value="">（无）</option>
-    </select>
     <button id="btnPlay" class="btn" type="button" disabled title="播放/暂停（P）">
       <svg class="ic" aria-hidden="true"><use href="#i-play"></use></svg><span>播放</span><kbd>P</kbd>
+    </button>
+    <button id="btnDopesheet" class="btn" type="button" title="展开/收起时间轴（Tab）" aria-pressed="false">
+      <svg class="ic" aria-hidden="true"><use href="#i-timeline"></use></svg><span>时间轴</span><kbd>Tab</kbd>
     </button>
     <button id="btnSetup" class="btn" type="button" disabled title="回到绑定姿态（清除动画，恢复可摆位）">
       <svg class="ic" aria-hidden="true"><use href="#i-joint"></use></svg><span>绑定姿态</span>
@@ -394,10 +459,147 @@
   </div>
 </div>
 
+<!-- 可展开 Dopesheet（P0-14..P0-17）：收起态就是下面那行原播放条 -->
+<div id="dopesheet" class="dopesheet" hidden aria-label="时间轴">
+  <div id="dsSplit" class="ds-split" role="separator" aria-orientation="horizontal" aria-label="拖动调整时间轴高度" tabindex="0" title="拖动调整高度（160–420px）"></div>
+  <div class="ds-bar" role="toolbar" aria-label="时间轴工具">
+    <span class="ds-title">时间轴</span>
+    <!-- 三种视图共用同一份 Animation Document 与时间状态（规划书 §1.3 / §2.1）。
+         帧视图 = Flash 式逐帧；Dopesheet = 关键帧批量管理；Graph = 曲线。 -->
+    <span class="ds-tabs" role="tablist" aria-label="时间轴视图">
+      <button id="dsTabFrame" class="btn btn-sm" type="button" role="tab" aria-pressed="false" title="帧视图：Flash 式连续帧格，逐帧选择与帧范围操作">Frame</button>
+      <button id="dsTabDope" class="btn btn-sm" type="button" role="tab" aria-pressed="true" title="关键帧视图：批量管理关键帧时间">Dopesheet</button>
+      <button id="dsTabGraph" class="btn btn-sm" type="button" role="tab" aria-pressed="false" title="曲线视图（P1）">Graph</button>
+    </span>
+    <!-- 帧视图专用工具条（Dopesheet/Graph 下隐藏）：帧选择读数、上一帧/下一帧、帧吸附、FPS -->
+    <span id="dsFrameBar" class="ds-frame-bar" role="group" aria-label="帧视图工具" hidden>
+      <span class="ds-frame-read mono" id="dsFrameRead" title="当前帧 / 动画总帧数">帧 —</span>
+      <button id="dsPrevFrame" class="btn btn-sm" type="button" title="上一帧（←）">◀</button>
+      <button id="dsNextFrame" class="btn btn-sm" type="button" title="下一帧（→）">▶</button>
+      <button id="dsFrameFirst" class="btn btn-sm" type="button" title="第一帧（Home）">⇤</button>
+      <button id="dsFrameLast" class="btn btn-sm" type="button" title="最后一帧（End）">⇥</button>
+      <label class="toggle" title="帧吸附（Snap）：操作时间吸附到整数帧；关闭时允许小数时间定位（规划书 §3.1）">
+        <input id="dsSnapFrame" type="checkbox"><span>帧吸附</span>
+      </label>
+      <label class="ds-fps" title="时间轴帧率：只改变显示帧编号，不改关键帧的实际秒数（规划书 §7.4）">
+        <span class="lbl">FPS</span>
+        <input id="dsFps" type="number" min="1" max="240" step="1" value="30" aria-label="帧率">
+      </label>
+      <span id="dsFrameSelStat" class="ds-frame-sel dim" title="已选帧（Ctrl 多选 / Shift 连选 / 空白拖动框选）">未选帧</span>
+    </span>
+    <span id="dsAnimName" class="mono dim">—</span>
+    <label class="ds-search" title="搜索骨名 / 槽名 / 字段 / 标签（多词 AND，大小写无关）">
+      <input id="dsSearch" type="search" placeholder="搜索轨道" aria-label="搜索轨道">
+    </label>
+    <label class="toggle" title="只显示有 Key 的轨道（关闭时补已知骨的空轨；scale 缺省 1）">
+      <input id="dsOnlyKeyed" type="checkbox"><span>仅有 Key</span>
+    </label>
+    <span id="graphInfo" class="mono dim ds-graphinfo">未选轨</span>
+    <select id="graphComp" aria-label="Graph 分量" hidden>
+      <option value="0" selected>x</option>
+      <option value="1">y</option>
+    </select>
+    <span class="ds-segs" role="group" aria-label="段类型">
+      <button id="graphLinear" class="btn btn-sm" type="button" title="线性段">线性</button>
+      <button id="graphStepped" class="btn btn-sm" type="button" title="阶梯段">阶梯</button>
+      <button id="graphBezier" class="btn btn-sm" type="button" title="贝塞尔段">贝塞尔</button>
+    </span>
+    <label class="toggle" title="关键帧吸附到 30fps 帧格（默认关闭，避免改写已有非整帧时间）">
+      <input id="dsSnap" type="checkbox"><span>帧吸附</span>
+    </label>
+    <span class="spacer"></span>
+    <span id="dsKeyStat" class="dim mono">0 key</span>
+    <span id="dsEventNow" class="ds-eventnow mono dim" title="当前时刻命中事件（只显示，不播音频）">事件：无</span>
+    <span id="dsPreviewNote" class="edit-gate" hidden title="core 未求值 transform / path 约束：编辑与保存可用，但预览不完整"></span>
+    <span class="ds-legend" title="带琥珀色描边/小三角的关键帧位于贝塞尔曲线段内：只读，禁止拖动、删除；改值也会按原控制点改变形状">
+      <svg class="ds-curve" width="10" height="12" viewBox="0 0 10 12" aria-hidden="true"><path d="M1 2.5 5 0.6 9 2.5 5 4.4z" fill="#5aa9ff" stroke="#f0b429" stroke-width="1.1"/><path d="M2.6 6.6h4.8L5 10.4z" fill="#f0b429"/></svg><span>曲线段 Key 只读</span>
+    </span>
+    <span id="dsUnsupported" class="edit-gate" hidden></span>
+    <label class="ds-zoom" title="横向缩放（每秒钟像素宽度）">
+      <span class="lbl">缩放</span>
+      <input id="dsPxPerSec" type="range" min="20" max="600" step="10" value="100" aria-label="时间轴横向缩放">
+      <span id="dsPxPerSecV" class="val mono">100</span>
+    </label>
+    <button id="dsZoomOut" class="btn btn-sm" type="button" title="缩小时间轴">−</button>
+    <button id="dsZoomIn" class="btn btn-sm" type="button" title="放大时间轴">＋</button>
+    <button id="dsFit" class="btn btn-sm" type="button" title="显示整段动画">全部</button>
+    <button id="dsDelete" class="btn btn-sm" type="button" disabled title="删除选中的关键帧（Delete）">删除 Key</button>
+    <button id="dsAddKey" class="btn btn-sm primary" type="button" disabled title="先在左侧选中一条事件 / 绘制顺序 / 形变 / 约束行">加/改 Key</button>
+    <button id="dsNewDeform" class="btn btn-sm" type="button" title="给没有形变轨的网格附件从零新建形变 Key（planKeyEdit create）">新建形变</button>
+    <button id="dsClose" class="btn btn-sm" type="button" title="收起时间轴（Tab）">收起</button>
+  </div>
+  <!-- P2-01/02：额外轨道属性面板（事件 / 绘制顺序 / 形变 / 约束）；表单只存内存，提交才走 SpineTrackEdit -->
+  <div id="dsExtra" class="ds-extra" hidden aria-label="轨道属性">
+    <div class="ds-extra-hd">
+      <span id="dsExtraTitle" class="ds-extra-title mono">—</span>
+      <span id="dsExtraNote" class="ds-extra-note"></span>
+      <span class="spacer"></span>
+      <button id="dsExtraDelete" class="btn btn-sm" type="button" title="删除该轨道在播放头时刻的 Key（曲线段 Key 只读）">删除该时刻 Key</button>
+      <button id="dsExtraClose" class="btn btn-icon btn-sm" type="button" title="关闭轨道属性面板">✕</button>
+    </div>
+    <div id="dsExtraBody" class="ds-extra-body"></div>
+  </div>
+  <!-- 规划书 §5.4：选中关键帧的属性检查器（Property / Target / Frame / Time / Value + 插值三段）。
+       与上面的 #dsExtra（额外轨道：事件/绘制顺序/形变/约束/槽附件）是两块不同用途的面板：
+       这里针对**任意轨道上的一个具体 Key**，可以改数值、改插值、跳到该帧。 -->
+  <div id="dsKeyInsp" class="ds-keyinsp" hidden aria-label="关键帧属性检查器">
+    <div class="ds-keyinsp-hd">
+      <span class="ds-keyinsp-title">关键帧</span>
+      <span id="dsKeyInspWho" class="mono">—</span>
+      <span class="spacer"></span>
+      <button id="dsKeyInspLocate" class="btn btn-sm" type="button" title="把播放头定位到该关键帧所在帧">定位</button>
+      <button id="dsKeyInspDelete" class="btn btn-sm" type="button" title="删除该关键帧（曲线段 Key 只读）">删除</button>
+      <button id="dsKeyInspClose" class="btn btn-icon btn-sm" type="button" title="关闭属性检查器">✕</button>
+    </div>
+    <div class="ds-keyinsp-body">
+      <dl class="ds-keyinsp-grid">
+        <dt>Property</dt><dd id="dsKeyInspProp">—</dd>
+        <dt>Target</dt><dd id="dsKeyInspTarget">—</dd>
+        <dt>Frame</dt><dd id="dsKeyInspFrame" class="mono">—</dd>
+        <dt>Time</dt><dd id="dsKeyInspTime" class="mono">—</dd>
+      </dl>
+      <div class="ds-keyinsp-value">
+        <label class="ds-keyinsp-field" for="dsKeyInspValue">
+          <span>Value</span>
+          <input id="dsKeyInspValue" type="text" autocomplete="off" spellcheck="false" aria-describedby="dsKeyInspHint">
+        </label>
+        <span id="dsKeyInspUnit" class="dim mono"></span>
+        <button id="dsKeyInspApply" class="btn btn-sm primary" type="button" title="把输入的值写回该关键帧（一条事务，可撤销）">写入</button>
+      </div>
+      <p id="dsKeyInspHint" class="ds-keyinsp-hint dim">选中时间轴上的关键帧后，这里显示并可编辑它的值。</p>
+      <div class="ds-keyinsp-interp">
+        <span class="lbl">插值</span>
+        <span class="ds-segs" role="group" aria-label="关键帧插值">
+          <button id="dsKeyInspLinear" class="btn btn-sm" type="button" title="线性：匀速过渡到下一个关键帧">Stepped→Linear</button>
+          <button id="dsKeyInspStepped" class="btn btn-sm" type="button" title="阶梯：保持当前值直到下一个关键帧">Stepped</button>
+          <button id="dsKeyInspBezier" class="btn btn-sm" type="button" title="贝塞尔：用控制点控制速度变化">Bezier</button>
+        </span>
+        <span id="dsKeyInspCurve" class="dim mono" title="当前关键帧到下一关键帧的插值类型"></span>
+      </div>
+      <!-- 规划书 §8.1 / P4：曲线预设。只在插值已是 bezier 时可用（预设本质是贝塞尔控制点）。 -->
+      <div class="ds-keyinsp-presets">
+        <span class="lbl">曲线预设</span>
+        <select id="dsKeyInspPreset" aria-label="曲线预设" title="把常用缓动写成贝塞尔控制点（需插值为 Bezier）">
+          <option value="">—</option>
+        </select>
+        <button id="dsKeyInspPresetApply" class="btn btn-sm" type="button" disabled title="应用所选预设">应用</button>
+        <span id="dsKeyInspPresetNote" class="dim" title="当前段的预设识别结果"></span>
+      </div>
+    </div>
+  </div>
+  <div class="ds-body">
+    <div id="dsLabels" class="ds-labels" aria-hidden="true"></div>
+    <div id="dsTracks" class="ds-tracks">
+      <canvas id="dsCanvas"></canvas>
+      <canvas id="graphCanvas" hidden></canvas>
+    </div>
+  </div>
+</div>
+
 <footer class="statusbar">
   <span id="statusMsg" class="msg" aria-live="polite">未载入</span>
   <span class="spacer"></span>
-  <span id="toolHint" class="hint">拖动移动 · 按住 Space 平移 · 滚轮缩放 · <b>?</b> 帮助</span>
+  <span id="toolHint" class="hint">拖动移动 · 按住 Space 拖拽 · 滚轮缩放 · <b>?</b> 帮助</span>
 </footer>
 
 <div id="backdrop" class="backdrop" aria-hidden="true"></div>
@@ -405,68 +607,171 @@
 <!-- 单实例语音播放器（切走事件分页时停止；不放在 hidden 容器里） -->
 <audio id="voiceAudio" preload="metadata"></audio>
 
+<!-- ===== 帮助与快捷键（0.9.19 合并入口：速查 + 键盘表 + 可自定义） ===== -->
 <div id="helpOverlay" class="modal" role="dialog" aria-modal="true" aria-labelledby="helpTitle" hidden>
   <div class="modal-card">
     <div class="modal-hd">
       <svg class="ic" aria-hidden="true" style="width:16px;height:16px"><use href="#i-help"></use></svg>
-      <h2 id="helpTitle">操作与快捷键</h2>
+      <h2 id="helpTitle">帮助与快捷键</h2>
       <span class="spacer"></span>
       <button id="helpClose" class="btn btn-icon btn-sm" type="button" title="关闭（Esc）">
         <svg class="ic" aria-hidden="true"><use href="#i-close"></use></svg>
       </button>
     </div>
     <div class="modal-body">
-      <div class="help-block">
-        <h3>鼠标</h3>
+      <div class="help-block" style="grid-column:1/-1">
+        <h3>每个区域一句话</h3>
         <table class="help-table">
-          <tr><td>拖动部件</td><td>移动绑定骨位置（贴图没勾也能拖）</td></tr>
-          <tr><td>中键拖动</td><td>平移视图</td></tr>
-          <tr><td>Space 按住</td><td>临时平移视图（松开恢复移动工具）</td></tr>
-          <tr><td>滚轮</td><td>以指针为中心缩放</td></tr>
-          <tr><td>悬停</td><td>可移动件显示细描边</td></tr>
+          <tr><td>左侧工具条</td><td>分两组：<b>操作</b> = <b>Q</b> 选择（只选中）· <b>H</b> 拖拽（视野开关）· <b>V</b>/<b>G</b> 移动 · <b>R</b> 旋转 · <b>S</b> 缩放 · <b>W</b> 指向；<b>视图控制</b> = <b>+</b> 放大 · <b>−</b> 缩小 · <b>F</b> 适应窗口。分区名在展开态显示，收起态（44px）只留分隔线。<b>当前工具是实心蓝底 + 左侧白条 + 加粗</b>，其余灰色。<b>拖拽是开关</b>：点一下进、再点一下出（退出回到进入前的工具）。</td></tr>
+          <tr><td>画布</td><td>直接拖人物改姿势；滚轮缩放。<b>拖视野有三种方式</b>：① 点工具条的「拖拽」按钮（常驻，再点一次退出）② 按住 <b>Space</b>（临时，松手即回）③ 按住鼠标中键。左下角切换「绑定姿态 / 动画」。</td></tr>
+          <tr><td>右栏 · 图层</td><td>点一行选中部位；👁 显示/隐藏、🔒 锁定、搜索框过滤。「显示顺序 / 骨骼层级」切换排列方式。</td></tr>
+          <tr><td>右栏 · 属性</td><td>整块检查器（标题 + 选中部件 / 骨骼 / 附件 / 骨架结构）已移除，右栏现在只有部件列表。文档模式与 AutoKey 仍在顶部第 2 排；<b>K</b> 打关键帧、<b>Shift</b>+<b>T</b> 自由变换、<b>[</b> <b>]</b> 层级调整都还在。数值与层级/显示/锁定等操作走 <code>__characterEditor</code> 接口。</td></tr>
+          <tr><td>底部时间轴</td><td>一个播放头、一条轨道列表：双击行打键，拖菱形改时间，左上切 Graph。按 <b>Tab</b> 展开/收起。</td></tr>
+          <tr><td>更多分区</td><td>「骨架结构 / 调试」也已在 0.9.50 移除。右栏只剩部件列表与四个主分页（部件 / 台词 / 表情 / 动画）。骨架结构、镜像、轴心、调试诊断全部改为 <code>__characterEditor</code> 接口：<code>skelCreate</code> / <code>mirror</code> / <code>pivot</code> / <code>diagnostics</code>。</td></tr>
         </table>
       </div>
-      <div class="help-block" id="helpKeys">
-        <h3>键盘</h3>
+      <div class="help-block" id="helpKeys" style="grid-column:1/-1">
+        <h3>快捷键速查</h3>
         <table class="help-table">
-          <tr><td><kbd>V</kbd></td><td>移动工具</td></tr>
-          <tr><td><kbd>Space</kbd></td><td>按住临时平移（<b>不再播放</b>）</td></tr>
+          <tr><td><kbd>Q</kbd></td><td>选择工具（点选部位，不改数据）</td></tr>
+          <tr><td><kbd>V</kbd> / <kbd>G</kbd></td><td>移动工具（V 是 PS 习惯，G 是 Blender 别名）</td></tr>
+          <tr><td><kbd>R</kbd> / <kbd>S</kbd> / <kbd>W</kbd></td><td>旋转 / 缩放 / 指向</td></tr>
+          <tr><td><kbd>H</kbd></td><td>拖拽<b>开关</b>：按一下进入（画布左键拖动=移动视野，不碰部件），再按一下退出并回到进入前的工具</td></tr>
+          <tr><td><kbd>Space</kbd></td><td><b>按当前区域决定</b>：指针在画布 / 图层区 = 按住临时拖拽；指针在时间轴 / 播放条 = 播放暂停。</td></tr>
+          <tr><td><kbd>K</kbd></td><td>打关键帧（时间轴展开时打到时间轴，否则记当前位置）</td></tr>
+          <tr><td><kbd>Delete</kbd></td><td>删除关键帧（会先弹页内确认）</td></tr>
           <tr><td><kbd>P</kbd></td><td>播放 / 暂停</td></tr>
-          <tr><td><kbd>F</kbd></td><td>适配全部</td></tr>
-          <tr><td><kbd>Shift</kbd>+<kbd>F</kbd></td><td>适配选中部件</td></tr>
-          <tr><td><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd></td><td>微调 1（父骨局部单位），Shift ×10</td></tr>
+          <tr><td><kbd>F</kbd> / <kbd>Shift</kbd>+<kbd>F</kbd></td><td>适应窗口 / 只看选中</td></tr>
+          <tr><td><kbd>Tab</kbd></td><td>展开 / 收起时间轴</td></tr>
           <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>层级下移 / 上移</td></tr>
-          <tr><td><kbd>H</kbd></td><td>显示 / 隐藏选中部件</td></tr>
-          <tr><td><kbd id="helpModKey">Ctrl</kbd>+<kbd>Z</kbd></td><td>撤销</td></tr>
-          <tr><td><kbd id="helpModSave">Ctrl</kbd>+<kbd>S</kbd></td><td>保存文件（有写回目标时；输入框聚焦不劫持）</td></tr>
+          <tr><td><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd></td><td>微调 1 单位（Shift ×10）</td></tr>
           <tr><td><kbd>+</kbd> <kbd>-</kbd></td><td>放大 / 缩小</td></tr>
-          <tr><td><kbd>Esc</kbd></td><td>取消拖动 / 清除选择 / 关闭浮层与菜单</td></tr>
-          <tr><td><kbd>?</kbd></td><td>打开本帮助</td></tr>
+          <tr><td><kbd id="helpModKey">Ctrl</kbd>+<kbd>Z</kbd></td><td>撤销</td></tr>
+          <tr><td><kbd id="helpModRedo">Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd id="helpModRedo2">Ctrl</kbd>+<kbd>Y</kbd></td><td>重做</td></tr>
+          <tr><td><kbd id="helpModSave">Ctrl</kbd>+<kbd>S</kbd></td><td>保存（有写回目标时弹保存菜单，否则下载副本）</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>取消当前拖动 / 清除选择 / 关闭浮层与菜单</td></tr>
+          <tr><td><kbd id="helpKbHelp">?</kbd></td><td>打开本帮助</td></tr>
         </table>
+        <p class="help-note">输入框、下拉框、菜单聚焦时不会触发上面的单键快捷键。鼠标在画布上时 <b>Space 是拖拽</b>，在时间轴上时 <b>Space 是播放暂停</b>——这是同一个键按区域分工，不是两个模式。</p>
+      </div>
+      <div class="help-block" id="helpShortcuts" style="grid-column:1/-1">
+        <h3>快捷键（可自定义）</h3>
+        <p id="shortcutConflicts" class="help-note" hidden></p>
+        <div id="shortcutList" class="sc-list"></div>
+        <div class="sc-actions">
+          <button id="shortcutReset" class="btn btn-sm" type="button">恢复默认</button>
+          <span class="help-note">绑定只保存在浏览器 localStorage（dsh.character-editor.preferences），不写入人物包；点「重绑定」后按新组合键，Esc 取消。</span>
+        </div>
       </div>
       <div class="help-block" style="grid-column:1/-1">
-        <h3>编辑与数据</h3>
+        <h3>保存与撤销</h3>
         <table class="help-table">
-          <tr><td>撤销粒度</td><td>一次拖动 / 一次方向键 / 一次层级调整各记一条；没有实际移动不写撤销</td></tr>
-          <tr><td>拖动中按 Esc</td><td>回滚到本次手势开始前</td></tr>
-          <tr><td>吸附</td><td>默认关闭；打开后拖动取整到 1 个单位</td></tr>
-          <tr><td>显示层</td><td>四个显示层可任意叠加；贴图只影响显示，不改变编辑权限</td></tr>
-          <tr><td>显示 / 锁定</td><td>只影响查看器，不写入 JSON</td></tr>
-          <tr><td>保存文件</td><td>就地回写索引目录下的 index.json / model.json / atlas / 贴图；需要 serve.py（只读服务下置灰）</td></tr>
-          <tr><td>另存文件</td><td>下载一个 zip：index.json + model.json + model.atlas + 贴图，纯前端打包</td></tr>
-          <tr><td>导出格式</td><td>运行时 JSON 补丁（骨骼 x/y/rotation/scale + slots 顺序），不能还原 .spine 工程</td></tr>
+          <tr><td>撤销粒度</td><td>一次拖动 / 一次方向键 / 一次层级调整 / 一次数值提交各记一条；没有实际改变不写撤销。</td></tr>
+          <tr><td>拖动中按 Esc</td><td>回滚到本次手势开始前。</td></tr>
+          <tr><td>保存</td><td>顶栏「保存 ▾」：下载副本（永远安全）或写回原包（需要本地服务）。写回成功后才清除「● 未保存」。</td></tr>
+          <tr><td>切包保护</td><td>有未保存改动时打开另一个人物包，会先弹四选一：保存到原包 / 下载副本后继续 / 放弃调整 / 取消。</td></tr>
+          <tr><td>吸附</td><td>默认关闭；打开后平移取整 1 单位、旋转 5°、缩放 0.05。开关在「视图」菜单或 <code>__characterEditor.setSnap(true)</code>。</td></tr>
+          <tr><td>曲线段 Key</td><td>时间轴上带琥珀描边的 Key 在贝塞尔曲线段内，只读；在 Graph 视图里可直接改曲线类型与手柄。</td></tr>
         </table>
-        <p class="help-note">输入框 / 下拉框 / 菜单聚焦时不会触发上面的单键快捷键。摆位只在绑定姿态（动画选「（无）」）下进行，预览动画时检查器会给出「返回绑定姿态」的提示。</p>
       </div>
+      <div class="help-block" id="helpVersionBlock" style="grid-column:1/-1">
+        <h3>版本</h3>
+        <!-- 0.9.19：版本信息统一在「帮助 → 关于」里，这里只留一个跳转，
+             避免同一份版本号在两处维护、以后漂移。 -->
+        <p class="help-note">
+          编辑器 <b id="helpVersion">—</b> · <span id="helpBuiltAt">—</span>
+          —— 完整工具信息（许可、运行时、包格式版本）见
+          <button id="helpOpenAbout" class="btn btn-sm" type="button">关于</button>
+        </p>
+        <p class="help-note">缓存戳与版本同源：index.html / selftest.html 里所有 <code>?v=</code> 必须与 <code>version.js</code> 的 <code>version</code> 一致，改版本请跑 <code>node scripts/bump-editor-version.mjs &lt;x.y.z&gt;</code>（校验用 <code>--check</code>）。编辑器版本<b>不影响人物包 JSON</b>。</p>
+      </div>
+    </div>
+    </div>
+  </div>
+
+<!-- ===== 关于（0.9.19）：工具信息，字段全部来自 version.js / bundle.js，不手写版本号 ===== -->
+<div id="aboutOverlay" class="modal" role="dialog" aria-modal="true" aria-labelledby="aboutTitle" hidden>
+  <div class="modal-card about-card">
+    <div class="modal-hd">
+      <svg class="ic" aria-hidden="true" style="width:16px;height:16px"><use href="#i-info"></use></svg>
+      <h2 id="aboutTitle">关于</h2>
+      <span class="spacer"></span>
+      <button id="aboutClose" class="btn btn-icon btn-sm" type="button" title="关闭（Esc）">
+        <svg class="ic" aria-hidden="true"><use href="#i-close"></use></svg>
+      </button>
+    </div>
+    <div class="modal-body about-body">
+      <table class="about-table">
+        <tr><td>名称</td><td><b id="aboutLabel">—</b></td></tr>
+        <tr><td>版本</td><td><b id="aboutVersion">—</b> <span id="aboutBuiltAt" class="dim">—</span></td></tr>
+        <tr><td>里程碑</td><td id="aboutMilestone">—</td></tr>
+        <tr><td>数据版本</td><td id="aboutSchemaApi">—</td></tr>
+        <tr><td>人物包格式</td><td id="aboutPackFormat">—</td></tr>
+        <tr><td>运行时</td><td id="aboutRuntime">—</td></tr>
+      </table>
+      <h3 class="about-h3">许可与来源</h3>
+      <table class="about-table">
+        <tr><td>代码</td><td><b>MIT</b>（继承 dsh-pets，部分派生自 dsh-pet 的 MIT 许可）</td></tr>
+        <tr><td>角色资产</td><td><b>CC BY-NC-SA 4.0</b>（署名 · 非商业 · 相同方式共享）</td></tr>
+        <tr><td>仓库</td><td><code>dsh-pets-character-studio</code> —— 人物包制作与分发</td></tr>
+        <tr><td>职责边界</td><td>本工具只做人物包制作；动态桌宠、会话与事件播放由独立的 dsh-pets 项目负责</td></tr>
+      </table>
+      <h3 class="about-h3">说明</h3>
+      <p class="about-note">
+        编辑器版本与人物包格式是两套版本轴：改编辑器版本不会改变任何人物包 JSON。
+        人物包规范见 <code>docs/dsh-pets-character-pack-format-v3.md</code>。
+      </p>
+      <p class="about-note dim" id="aboutClient">—</p>
     </div>
   </div>
 </div>
 
-<script src="icons.js"></script>
-<script src="spine-core.js"></script>
-<script src="bundle.js"></script>
-<script src="voice.js"></script>
-<script src="fixtures/cases.js"></script>
-<script src="app.js"></script>
+
+<!-- ===== 页内确认模态（替代 window.confirm；Enter 确认 / Esc 取消 / 焦点归还） ===== -->
+<div id="simpleConfirm" class="modal" role="dialog" aria-modal="true" aria-labelledby="simpleConfirmTitle" hidden>
+  <div class="modal-card simple-confirm">
+    <div class="modal-hd">
+      <h2 id="simpleConfirmTitle">确认</h2>
+      <span class="spacer"></span>
+      <button id="simpleConfirmX" class="btn btn-icon btn-sm" type="button" title="取消（Esc）">
+        <svg class="ic" aria-hidden="true"><use href="#i-close"></use></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <p id="simpleConfirmText" class="simple-confirm-text">—</p>
+      <p id="simpleConfirmHint" class="simple-hint" hidden></p>
+    </div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <span id="simpleConfirmActions" class="simple-confirm-actions"></span>
+    </div>
+  </div>
+</div>
+
+<script src="version.js?v=0.9.168"></script><script src="icons.js?v=0.9.168"></script>
+<script src="spine-core.js?v=0.9.168"></script>
+<script src="bundle.js?v=0.9.168"></script>
+<script src="bone-edit.js?v=0.9.168"></script>
+<script src="track-edit.js?v=0.9.168"></script>
+<script src="pose-tools.js?v=0.9.168"></script>
+<script src="ik-aim.js?v=0.9.168"></script>
+<script src="timeline.js?v=0.9.168"></script>
+<script src="frame-timeline.js?v=0.9.168"></script>
+<script src="pose-compare.js?v=0.9.168"></script>
+<script src="key-inspector.js?v=0.9.168"></script>
+<script src="curve-presets.js?v=0.9.168"></script>
+<script src="deform-edit.js?v=0.9.168"></script>
+<script src="anim-markers.js?v=0.9.168"></script>
+<script src="frame-thumbs.js?v=0.9.168"></script>
+<script src="audio-wave.js?v=0.9.168"></script>
+<script src="curve-edit.js?v=0.9.168"></script>
+<script src="batch-edit.js?v=0.9.168"></script>
+<script src="keymap.js?v=0.9.168"></script>
+<script src="anim-edit.js?v=0.9.168"></script>
+<script src="slot-groups.js?v=0.9.168"></script>
+<script src="event-names.js?v=0.9.168"></script>
+<script src="voice.js?v=0.9.168"></script>
+<script src="fixtures/cases.js?v=0.9.168"></script>
+<script src="app.js?v=0.9.168"></script>
 </body>
 </html>
