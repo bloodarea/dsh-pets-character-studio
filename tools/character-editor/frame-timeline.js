@@ -733,6 +733,12 @@
     }
     const kind = String(o.op || "");
     const fps = normFps(o.fps);
+    /* 合法 op 白名单：必须在「空动画提前返回」**之前**校验。
+       否则空动画 + 非法 op 会返回 ok:true，调用方误以为操作生效（实测过的契约漏洞）。 */
+    const KNOWN_OPS = ["insert", "remove", "move", "scale", "clear", "reverse", "spread"];
+    if (KNOWN_OPS.indexOf(kind) < 0) {
+      return fail("op", "FRAME_OP_UNKNOWN", "未知的时间帧操作：" + kind);
+    }
     const cols = readColumns(anim);
     if (!cols.length) {
       return { ok: true, value: clone(anim), changed: 0, moved: 0, removed: 0, boundaries: [], issues: [] };

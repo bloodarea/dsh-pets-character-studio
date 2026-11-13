@@ -27,6 +27,15 @@
     { id: "scale", label: "缩放工具", scope: "editor", defaultKeys: ["S"] },
     { id: "pose", label: "Pose 工具", scope: "editor", defaultKeys: ["W"] },
     { id: "key", label: "打关键帧", scope: "editor", defaultKeys: ["K"] },
+    /* Flash 式三键（用户明确要求「像 Flash 一样的操作体验」）：
+       · F5 = 普通帧（延长当前姿态的显示时间）
+       · F6 = 关键帧（把当前姿态记成 Key；若已在该帧则转成普通帧延长）
+       · F7 = 空白帧（清空当前帧该轨道的 Key，语义等价于 Flash 空白关键帧）
+       注意：Spine 没有通用「空白关键帧对象」（规划书 §3.5 禁止为模仿 Flash 引入错误数据语义），
+       所以 F7 实现为「删除当前帧该轨道的 Key」——在帧格上看起来就是空白，但不新建错误对象。 */
+    { id: "frameHold", label: "普通帧（延长姿态）", scope: "timeline-graph", defaultKeys: ["F5"], requires: { animation: true } },
+    { id: "frameKey", label: "关键帧（打键 / 转普通帧）", scope: "timeline-graph", defaultKeys: ["F6"], requires: { animation: true } },
+    { id: "frameBlank", label: "空白帧（清空当前帧该轨道）", scope: "timeline-graph", defaultKeys: ["F7"], requires: { animation: true } },
     { id: "play", label: "播放 / 暂停", scope: "editor", defaultKeys: ["P"] },
     { id: "undo", label: "撤销", scope: "editor", defaultKeys: ["Mod+Z"] },
     { id: "redo", label: "重做", scope: "editor", defaultKeys: ["Mod+Shift+Z", "Mod+Y"] },
@@ -55,7 +64,13 @@
 
   /** 固定通道：不可改绑、也不可被其它动作占用 */
   const RESERVED_CHORDS = Object.freeze(["Space", "Escape"]);
-  /** 浏览器 / 系统保留组合：不得注册为编辑器动作（契约 §7） */
+  /** 浏览器 / 系统保留组合：不得注册为编辑器动作（契约 §7）
+   *
+   *  **F5 已从本表移除**（用户明确要求「像 Flash 一样的操作体验」，Flash 的 F5 就是
+   *  「普通帧/延长」）。代价：编辑页里按 F5 不再触发浏览器刷新 —— 这是刻意的取舍，
+   *  因为本工具是动画编辑器，F5 的 Flash 语义优先于刷新。仍然保留 F11/F12
+   *  （全屏/开发者工具），以及所有 Ctrl/Cmd 组合（标签页/地址栏类）。
+   */
   const BROWSER_RESERVED = Object.freeze([
     "Mod+KeyW",
     "Mod+KeyR",
@@ -73,7 +88,6 @@
     "Mod+Digit7",
     "Mod+Digit8",
     "Mod+Digit9",
-    "F5",
     "F11",
     "F12",
     "Alt+ArrowLeft",

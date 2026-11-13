@@ -138,7 +138,14 @@
   ok("Escape 固定通道", K.isReservedChord("Escape") === true);
   ok("普通键不是固定通道", K.isReservedChord("KeyV") === false);
   ok("Mod+KeyW 浏览器保留", K.isBrowserReservedChord("Mod+KeyW") === true);
-  ok("F5 浏览器保留", K.isBrowserReservedChord("F5") === true);
+  /* F5 已从浏览器保留表移除：用户要求「像 Flash 一样的操作体验」，
+     Flash 的 F5 = 普通帧/延长，所以它必须可绑定。代价是编辑页按 F5 不再刷新。 */
+  ok("F5 已可绑定（Flash 语义优先于浏览器刷新）", K.isBrowserReservedChord("F5") === false);
+  ok("F5 已绑定到「普通帧」动作", (K.DEFAULT_BINDINGS.frameHold || []).indexOf("F5") >= 0);
+  ok("F6 已绑定到「关键帧」动作", (K.DEFAULT_BINDINGS.frameKey || []).indexOf("F6") >= 0);
+  ok("F7 已绑定到「空白帧」动作", (K.DEFAULT_BINDINGS.frameBlank || []).indexOf("F7") >= 0);
+  ok("F11 仍是浏览器保留", K.isBrowserReservedChord("F11") === true);
+  ok("F12 仍是浏览器保留", K.isBrowserReservedChord("F12") === true);
   ok("Mod+Digit1 浏览器保留", K.isBrowserReservedChord("Mod+Digit1") === true);
   ok("Mod+KeyS 允许（保存）", K.isBrowserReservedChord("Mod+KeyS") === false);
   ok("Shift+Slash 允许（帮助）", K.isBrowserReservedChord("Shift+Slash") === false);

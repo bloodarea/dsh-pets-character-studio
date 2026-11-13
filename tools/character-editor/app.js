@@ -13132,12 +13132,380 @@ function frameThumbsState() {
     };
   }
 
+/*
+ * Flash 式三键：F5 普通帧 / F6 关键帧 / F7 空白帧
+ *
+ * 语义适配（规划书 §3.5 禁止「为模仿 Flash 引入错误的数据语义」）
+ *
+ *   Flash 概念        →  Spine 等价做法
+ *   ───────────────────────────────────────────────────────────────────
+ *   F5 普通帧（延长）   →  在目标帧写入与当前帧相同的值。两帧间插值恒定 =
+ *                          视觉上姿态被延长。**不新建任何对象**，就是普通 Spine Key。
+ *   F6 关键帧          →  当前帧没 Key 就打；已有 Key 则转成 F5（延长到下一帧）。
+ *                          对应 Flash 里 F6 连按两次 = 关键帧 + 普通帧。
+ *   F7 空白帧          →  **按轨道类型分派**（关键设计，见下）
+ *
+ * F7 为什么不能「一把清空」：
+ *   Flash 的空白关键帧是「一个没有内容的帧对象」；Spine 的骨骼属性没有这个概念
+ *   ——某帧没有 Key 只表示「继续按原插值或 Setup Pose 走」。
+ *   如果 F7 直接把该骨骼当前帧的所有字段 Key 全删掉，用户会看到整条骨骼突然
+ *   跳回插值结果，等于「把整个角色骨骼状态弄丢」。所以按轨道类型分派：
+ *
+ *     轨道类型                     F7 语义
+ *     ─────────────────────────────────────────────────────────────
+ *     图片附件轨道（slot.attachment）  隐藏当前附件（走 toggleHidden，不删 Key）
+ *     骨骼变换轨道（rotate/translate/  **二选一**，由用户明确选择：
+ *       scale/shear）                    ① 清除当前帧关键帧
+ *                                        ② 重置到绑定姿态（Setup Pose）
+ *     其它离散轨道（drawOrder/events）  清除当前帧该轨道 Key
+ *
+ *   骨骼变换轨道必须二选一，不能默认全清 —— 这是本文件与「一把清空」的核心差别。
+ */
+
+/** 从 Key 项推出 animRemoveKey 需要的 kind */
+function flashKindOf(item) {
+  const rk = String((item && item.rowKey) || "");
+  if (rk.startsWith("bone:")) return "bones";
+  if (rk.startsWith("slot:")) return "slots";
+  const seg = rk.startsWith("timeline:") ? rk.slice("timeline:".length) : "";
+  const head = seg.split(":")[0];
+  if (head === "ik" || head === "transform" || head === "path") return head;
+  if (head === "deform") return "deform";
+  if (head === "events") return "events";
+  if (head === "drawOrder") return "drawOrder";
+  if (state.bones && state.bones[item.owner]) return "bones";
+  return "bones";
+}
+
+/** 骨骼变换类字段（这些字段的 F7 必须二选一，不能直接清空） */
+const FLASH_BONE_TRANSFORM_FIELDS = ["rotate", "translate", "scale", "shear", "x", "y", "rotation", "scaleX", "scaleY", "shearX", "shearY"];
+
+/** F5/F6/F7 共同前置校验 */
+function flashKeyGuard() {
+  if (!state.anim) return "当前没有选中的动画";
+  if (state.playing) return "播放中：先暂停";
+  if (editMode() !== "animate") return "需要先切到「动画」模式";
+  return null;
+}
+
+/** 取一行的所有 Key 时间。
+ *  **踩过的坑**：timeline.js 的行结构是 `row.keys`（对象数组，每项有 .time），
+ *  **没有 `row.keyTimes` 字段** —— `ed.timeline()` 句柄里的 keyTimes 是它自己现算的。
+ *  之前直接读 row.keyTimes 得到 undefined，导致「明明有 Key 却说没有」。
+ *  这里两种都兼容，避免以后再踩。 */
+function flashKeyTimesOf(row) {
+  if (!row) return [];
+  if (Array.isArray(row.keys)) return row.keys.map((k) => (k && typeof k === "object" ? Number(k.time) : Number(k))).filter((t) => Number.isFinite(t));
+  if (Array.isArray(row.keyTimes)) return row.keyTimes.filter((t) => Number.isFinite(t));
+  return [];
+}
+
+/** 某时间戳是否属于「当前帧」。
+ *
+ *  踩过的坑（两次）：
+ *  1) 真实包的 Key 不落在整数帧上：idle 的 Key 在 0.125s，×30fps = 3.75 帧；
+ *  2) setPlayhead(4/30) 得到 0.13333s，而 Key 在 0.125s —— 差 0.0083s。
+ *
+ *  稳妥判据：**时间距离在半帧以内**就算同一帧。
+ *  既容忍 Key 的小数时间，也容忍播放头停在帧边界之外一点。 */
+function flashTimeOnFrame(time, frame, fps) {
+  const t = Number(time);
+  const f = Number(frame);
+  if (!Number.isFinite(t) || !Number.isFinite(f)) return false;
+  const rate = Number.isFinite(fps) && fps > 0 ? fps : 30;
+  const half = 0.5 / rate;
+  return Math.abs(t - f / rate) <= half;
+}
+
+/** 当前帧该骨骼已有 Key 的字段列表 */
+function flashFieldsAtFrame(name, frame) {
+  const fps = tlFps();
+  const built = dsBuild();
+  const out = [];
+  for (const row of built.rows || []) {
+    if (row.kind === "group" || row.owner !== name) continue;
+    for (const t of flashKeyTimesOf(row)) {
+      if (flashTimeOnFrame(t, frame, fps)) { out.push(row.field); break; }
+    }
+  }
+  return out;
+}
+
+/**
+ * F5 普通帧：把当前帧姿态值写到目标帧，让姿态在区间内保持。
+ * @returns {{ok:boolean, reason?:string, wrote?:number, frame?:number}}
+ */
+function flashHoldFrame(targetFrame) {
+  const guard = flashKeyGuard();
+  if (guard) { setStatus(guard, "warn"); return { ok: false, reason: guard }; }
+  const name = state.edit.selBone;
+  if (!name) { setStatus("F5：先选中一根骨骼", "warn"); return { ok: false, reason: "NO_BONE" }; }
+
+  const fps = tlFps();
+  const fromFrame = fsCurrentFrame();
+  const toFrame = Number.isFinite(targetFrame) ? Math.round(targetFrame) : fromFrame + 1;
+  if (toFrame <= fromFrame) {
+    setStatus("F5：目标帧必须晚于当前帧", "warn");
+    return { ok: false, reason: "FRAME_ORDER" };
+  }
+  const have = flashFieldsAtFrame(name, fromFrame);
+  if (!have.length) {
+    setStatus("F5：当前帧「" + name + "」没有 Key，先按 F6 打一个", "warn");
+    return { ok: false, reason: "NO_KEY_AT_CURRENT" };
+  }
+
+  const before = snapshot();
+  const savedT = state.t;
+  let wrote = 0;
+  try {
+    for (const field of have) {
+      state.t = toFrame / fps;
+      if (animAddBoneKey(state.anim, name, field)) wrote++;
+    }
+  } finally {
+    state.t = savedT;
+  }
+  if (!wrote) {
+    setStatus("F5：没有写入（目标帧可能已有相同值）", "warn");
+    return { ok: false, reason: "NO_WRITE" };
+  }
+  commit(before);
+  syncEditToolbar();
+  setStatus("F5 普通帧：「" + name + "」的姿态延长到第 " + toFrame + " 帧（" + wrote + " 个字段）");
+  return { ok: true, wrote: wrote, frame: toFrame };
+}
+
+/**
+ * F6 关键帧：当前帧没 Key 就打；已有 Key 则按 F5 延长到下一帧。
+ */
+function flashKeyFrame() {
+  const guard = flashKeyGuard();
+  if (guard) { setStatus(guard, "warn"); return { ok: false, reason: guard }; }
+  const name = state.edit.selBone;
+  if (!name) { setStatus("F6：先选中一根骨骼", "warn"); return { ok: false, reason: "NO_BONE" }; }
+
+  const frame = fsCurrentFrame();
+  const have = flashFieldsAtFrame(name, frame);
+  if (have.length) return flashHoldFrame(frame + 1);
+  const ok = keySelectedBone();
+  return { ok: !!ok, mode: "key", frame: frame };
+}
+
+/**
+ * F7 的「意图探测」：告诉调用方当前上下文该走哪条分支，不写数据。
+ * UI 用它决定「直接执行」还是「弹二选一」。
+ * @returns {{ok:boolean, kind:string, reason?:string, options?:string[], frame?:number, target?:object}}
+ *   kind: "attachment" | "boneTransform" | "discrete" | "none"
+ */
+function flashBlankIntent() {
+  const guard = flashKeyGuard();
+  if (guard) return { ok: false, kind: "none", reason: guard };
+  const frame = fsCurrentFrame();
+  const fps = tlFps();
+  const name = state.edit.selBone;
+
+  /* 1) 优先看时间轴 Key 选择：选中什么就作用于什么 */
+  const sel = dsSelection();
+  if (sel.items && sel.items.length) {
+    const it = sel.items[0];
+    const field = String(it.field || "");
+    const rk = String(it.rowKey || "");
+    if (rk.startsWith("slot:") && /attachment/i.test(field)) {
+      return { ok: true, kind: "attachment", frame: frame, target: it };
+    }
+    if (rk.startsWith("bone:") && FLASH_BONE_TRANSFORM_FIELDS.indexOf(field) >= 0) {
+      return { ok: true, kind: "boneTransform", frame: frame, target: it, options: ["clearKeys", "resetSetup"] };
+    }
+    return { ok: true, kind: "discrete", frame: frame, target: it };
+  }
+
+  /* 2) 没选 Key：按「当前帧 + 当前骨骼」推断 */
+  if (!name) return { ok: false, kind: "none", reason: "没有选中骨骼或 Key" };
+  const built = dsBuild();
+  const rowsHere = [];
+  for (const row of built.rows || []) {
+    if (row.kind === "group" || row.owner !== name) continue;
+    for (const t of flashKeyTimesOf(row)) {
+      if (flashTimeOnFrame(t, frame, fps)) { rowsHere.push({ owner: row.owner, field: row.field, time: t, rowKey: row.rowKey }); break; }
+    }
+  }
+  if (!rowsHere.length) return { ok: false, kind: "none", reason: "当前帧没有可操作的 Key", frame: frame };
+
+  const anyBone = rowsHere.some((r) => FLASH_BONE_TRANSFORM_FIELDS.indexOf(String(r.field)) >= 0);
+  if (anyBone) {
+    return {
+      ok: true, kind: "boneTransform", frame: frame, target: rowsHere[0],
+      targets: rowsHere, options: ["clearKeys", "resetSetup"],
+    };
+  }
+  return { ok: true, kind: "discrete", frame: frame, target: rowsHere[0], targets: rowsHere };
+}
+
+/**
+ * F7 空白帧 —— 按轨道类型分派。
+ * @param {{mode?:string}} opts
+ *   mode = "clearKeys"   清除当前帧关键帧（骨骼变换轨道需显式指定）
+ *   mode = "resetSetup"  重置到绑定姿态（骨骼变换轨道需显式指定）
+ *   mode 缺省：附件轨道直接隐藏；离散轨道直接清除；骨骼变换轨道**拒绝执行并返回需要选择**
+ * @returns {{ok:boolean, kind?:string, needChoice?:boolean, reason?:string, ...}}
+ */
+function flashBlankFrame(opts) {
+  const o = opts || {};
+  const intent = flashBlankIntent();
+  if (!intent.ok) {
+    setStatus("F7：" + (intent.reason || "无法操作"), "warn");
+    return { ok: false, reason: intent.reason, kind: intent.kind };
+  }
+
+  /* ---- 图片附件轨道：隐藏当前附件（不删 Key） ---- */
+  if (intent.kind === "attachment") {
+    const slotName = intent.target ? intent.target.owner : null;
+    const idx = slotName ? state.slots.findIndex((s) => s.name === slotName) : -1;
+    if (idx < 0) {
+      setStatus("F7：找不到附件所属的槽位", "warn");
+      return { ok: false, reason: "SLOT_NOT_FOUND", kind: "attachment" };
+    }
+    const before = snapshot();
+    toggleHidden(idx);
+    commit(before);
+    syncEditToolbar();
+    setStatus("F7 空白帧：隐藏附件「" + slotName + "」（附件轨道用隐藏表示空白，不删 Key）");
+    return { ok: true, kind: "attachment", slot: slotName, hidden: state.hidden.has(slotName) };
+  }
+
+  /* ---- 骨骼变换轨道：必须二选一，不能默认全清 ---- */
+  if (intent.kind === "boneTransform") {
+    const mode = String(o.mode || "");
+    if (mode !== "clearKeys" && mode !== "resetSetup") {
+      setStatus("F7：骨骼变换轨道需要选择「清除关键帧」或「重置到绑定姿态」", "warn");
+      /* 用带按钮的提示条做二选一：骨骼变换轨道的空白帧有两种含义，
+         必须让用户明确选择，避免一次 F7 就把骨骼状态弄丢。 */
+      notice("warn", "F7 空白帧：骨骼变换轨道有两种含义，请选择", [
+        {
+          label: "清除当前帧关键帧",
+          onClick: () => { clearNotices(); flashBlankFrame({ mode: "clearKeys" }); },
+        },
+        {
+          label: "重置到绑定姿态",
+          onClick: () => { clearNotices(); flashBlankFrame({ mode: "resetSetup" }); },
+        },
+      ], { verbatim: true });
+      return {
+        ok: false, kind: "boneTransform", needChoice: true,
+        options: ["clearKeys", "resetSetup"], frame: intent.frame,
+        message: "骨骼变换轨道的空白帧有两种含义，请明确选择（避免一次 F7 就把骨骼状态弄丢）",
+      };
+    }
+    if (mode === "resetSetup") {
+      /* 重置到绑定姿态：把当前帧的骨骼变换 Key 写成 Setup Pose 的值。
+         **数据来源**：绑定姿态在 state.model.bones[]（原始模型）。
+         **关键**：animAddBoneKey 取的是「当前预览值」(lastPose.local)，不会读 modelBone，
+         所以必须先把 state.bones[name] 临时设成绑定值、重算姿态、再打键，最后恢复。 */
+      const name = state.edit.selBone || (intent.target && intent.target.owner);
+      const modelBone = name && state.model && Array.isArray(state.model.bones)
+        ? state.model.bones.find((b) => b && b.name === name)
+        : null;
+      if (!modelBone) {
+        setStatus("F7：在模型里找不到骨骼「" + name + "」", "warn");
+        return { ok: false, reason: "BONE_NOT_FOUND", kind: "boneTransform" };
+      }
+      const live = state.bones ? state.bones[name] : null;
+      if (!live) {
+        setStatus("F7：运行时骨骼表里没有「" + name + "」", "warn");
+        return { ok: false, reason: "BONE_NOT_FOUND", kind: "boneTransform" };
+      }
+      const before = snapshot();
+      const savedT = state.t;
+      const wroteFields = [];
+      const lib = animEditLib();
+      /* **必须深拷贝**：animDraft() 在还没有草稿时返回 raw[name] 的**活引用**，
+         原地修改会连带改掉 before 快照，导致 commit() 认为「没有变化」而不写历史
+         （实测症状：F7 重置后 undo 栈为空、Ctrl+Z 撤不回来）。 */
+      const draftSrc = animDraft(state.anim);
+      const draft = draftSrc ? JSON.parse(JSON.stringify(draftSrc)) : null;
+      if (!lib || !draft) {
+        setStatus("F7：动画草稿不可用", "warn");
+        return { ok: false, reason: "NO_DRAFT", kind: "boneTransform" };
+      }
+      /* 「重置到绑定姿态」的 Key 相对值就是**中性值**：
+         因为 relativeValues 算的是 (当前姿态 − setup)，当前姿态 == setup 时
+         旋转/位移 = 0、缩放倍率 = 1、剪切 = 0。
+         直接把 local 设成 setup 的副本交给 relativeValues，语义最准确，
+         也避免自己手写一套「中性值」常量（那样两处容易漂移）。 */
+      const neutral = Object.assign({}, modelBone);
+      const diag = [];
+      /* **命名体系不同，必须分开**（实测抓到的坑）：
+         · 轨道名（upsertKey 用）：rotate / translate / scale / shear
+         · 模型原始字段（model.bones[] 用）：rotation / x,y / scaleX,scaleY / shearX,shearY
+         之前只用一个数组，导致 "rotate" in modelBone === false，全部 skip。 */
+      const FIELD_MAP = [
+        { track: "rotate", model: ["rotation"] },
+        { track: "translate", model: ["x", "y"] },
+        { track: "scale", model: ["scaleX", "scaleY"] },
+        { track: "shear", model: ["shearX", "shearY"] },
+      ];
+      try {
+        state.t = (intent.frame || 0) / tlFps();
+        for (const fm of FIELD_MAP) {
+          /* 模型里至少有一个对应原始字段才写这条轨道 */
+          if (!fm.model.some((k) => k in modelBone)) { diag.push(fm.track + ":skip(notInModel)"); continue; }
+          const rel = lib.relativeValues(fm.track, neutral, modelBone);
+          if (!rel.ok) { diag.push(fm.track + ":relFail=" + (rel.issues && rel.issues[0] ? rel.issues[0].code : "?")); continue; }
+          const up = lib.upsertKey(draft, "bones", name, fm.track, rel.values, state.t);
+          if (!up.ok) { diag.push(fm.track + ":upsertFail=" + (up.issues && up.issues[0] ? up.issues[0].code + "/" + up.issues[0].message : "?")); continue; }
+          Object.keys(up.value).forEach((k) => { draft[k] = up.value[k]; });
+          wroteFields.push(fm.track);
+          diag.push(fm.track + ":ok");
+        }
+      } finally {
+        state.t = savedT;
+      }
+      if (!wroteFields.length) {
+        setStatus("F7：重置绑定姿态没有写入（" + diag.join(" ") + "）", "warn");
+        return { ok: false, reason: "NO_WRITE", kind: "boneTransform", diag: diag };
+      }
+      animSetDraft(state.anim, draft);
+      commit(before);
+      syncEditToolbar();
+      setStatus("F7 空白帧：「" + name + "」重置到绑定姿态（第 " + intent.frame + " 帧，" + wroteFields.join("/") + "）");
+      return { ok: true, kind: "boneTransform", mode: "resetSetup", wrote: wroteFields.length, fields: wroteFields, frame: intent.frame };
+    }
+    /* mode === clearKeys：落到下面的通用清除分支 */
+  }
+
+  /* ---- 通用清除（离散轨道 / 明确选了 clearKeys 的骨骼轨道） ---- */
+  const targets = intent.targets || (intent.target ? [intent.target] : []);
+  if (!targets.length) {
+    setStatus("F7：当前帧没有可清空的 Key", "warn");
+    return { ok: false, reason: "NO_TARGET", kind: intent.kind };
+  }
+  const before = snapshot();
+  let removed = 0;
+  for (const it of targets) {
+    if (animRemoveKey(state.anim, flashKindOf(it), it.owner, it.field, it.time)) removed++;
+  }
+  if (!removed) {
+    setStatus("F7：没有删除任何 Key", "warn");
+    return { ok: false, reason: "NO_REMOVE", kind: intent.kind };
+  }
+  state.edit.timeline.selection = { items: [], primary: null };
+  state.edit.timeline.selectedKey = null;
+  commit(before);
+  syncEditToolbar();
+  setStatus("F7 空白帧：清除第 " + intent.frame + " 帧的 " + removed + " 个 Key（" + intent.kind + "）");
+  return { ok: true, kind: intent.kind, mode: "clearKeys", removed: removed, frame: intent.frame };
+}
+
   const KEYMAP_RUN = {
     translate: () => (editTarget() === "bone" ? setEditTool("translate") : setTool("move")),
     rotate: () => editTarget() === "bone" && setEditTool("rotate"),
     scale: () => editTarget() === "bone" && setEditTool("scale"),
     pose: () => editTarget() === "bone" && setEditTool("pose"),
     key: () => (editTarget() === "bone" && state.edit.selBone ? keySelectedBone() : setStatus("先选骨骼再打键", "warn")),
+    /* Flash 式三键：F5 普通帧 / F6 关键帧 / F7 空白帧 */
+    frameHold: () => flashHoldFrame(),
+    frameKey: () => flashKeyFrame(),
+    frameBlank: () => flashBlankFrame(),
     delete: () => dsDeleteSelected(),
     copy: () => dsCopySelection(),
     paste: () => dsPasteClipboard(state.t),
@@ -21787,6 +22155,35 @@ function frameThumbsState() {
       setFrameThumbs: (on, opts) => setFrameThumbs(on, opts),
       frameThumbs: () => frameThumbsState(),
       invalidateFrameThumbs: () => { invalidateFrameThumbs(); return { cleared: true }; },
+      /* Flash 式三键（F5/F6/F7）：供 agent 与测试直接调用，与快捷键走同一条链路 */
+      flashHoldFrame: (targetFrame) => flashHoldFrame(targetFrame),
+      flashKeyFrame: () => flashKeyFrame(),
+      flashBlankFrame: (opts) => flashBlankFrame(opts),
+      /* F7 的意图探测（不写数据）：UI 用它决定直接执行还是弹二选一 */
+      flashBlankIntent: () => flashBlankIntent(),
+      /* 诊断：F5/F6/F7 的帧匹配到底看到了什么（排查「有 Key 却说没有」用） */
+      flashDebug: () => {
+        const fps = tlFps();
+        const frame = fsCurrentFrame();
+        const name = state.edit.selBone;
+        const built = dsBuild();
+        const rowsHere = [];
+        for (const row of built.rows || []) {
+          if (row.kind === "group" || row.owner !== name) continue;
+          for (const t of flashKeyTimesOf(row)) {
+            if (flashTimeOnFrame(t, frame, fps)) { rowsHere.push({ owner: row.owner, field: row.field, time: t }); break; }
+          }
+        }
+        const target = (built.rows || []).find((r) => r.owner === name && r.field === "rotate");
+        return {
+          fps: fps, frame: frame, selBone: name, stateT: state.t,
+          fieldsAtFrame: flashFieldsAtFrame(name, frame),
+          rowsHere: rowsHere,
+          builtRowsForBone: (built.rows || []).filter((r) => r.owner === name).map((r) => ({ field: r.field, kind: r.kind, n: (r.keyTimes || []).length, first3: (r.keyTimes || []).slice(0, 3) })),
+          sampleRow: target ? { owner: target.owner, field: target.field, n: (target.keyTimes || []).length } : null,
+          builtOk: built.ok !== false,
+        };
+      },
       /* §14 P4 音频波形：开关 / 状态 / 主动解码（纯显示，不写模型） */
       setAudioWave: (on, opts) => setAudioWave(on, opts),
       audioWave: () => audioWaveState(),
