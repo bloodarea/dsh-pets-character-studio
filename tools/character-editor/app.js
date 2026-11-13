@@ -6156,30 +6156,103 @@ function renderAnimIdleList() {
 
   const fps = tlFps();
   const cur = state.animEdit.sel || state.anim || "";
-  for (const name of names) {
+  const keyCountOf = (name) => {
+    const lib = animEditLib();
+    const draft = animDraft(name);
+    if (!lib || !draft) return 0;
+    try {
+      const scan = lib.scanTracks(draft);
+      let n = 0;
+      for (const b of scan.bones) for (const t of b.tracks) n += t.keys ? t.keys.length : 0;
+      for (const s of scan.slots) for (const t of s.tracks) n += t.keys ? t.keys.length : 0;
+      return n;
+    } catch (_) { return 0; }
+  };
+  const metaOf = (name) => {
     const dur = animDuration(name);
-    const frames = Math.round(dur * fps);
-    const keys = (() => {
-      /* 用 anim-edit 的扫描结果算总 Key 数，避免自己再写一套 */
-      const lib = animEditLib();
-      const draft = animDraft(name);
-      if (!lib || !draft) return 0;
-      try {
-        const scan = lib.scanTracks(draft);
-        let n = 0;
-        for (const b of scan.bones) for (const t of b.tracks) n += t.keys ? t.keys.length : 0;
-        for (const s of scan.slots) for (const t of s.tracks) n += t.keys ? t.keys.length : 0;
-        return n;
-      } catch (_) { return 0; }
-    })();
-    const meta = round(dur, 2) + "s · " + frames + " 帧 · " + keys + " key";
-    list.appendChild(animListItem(name, animLabel(name), meta, {
+    return round(dur, 2) + "s · " + Math.round(dur * fps) + " 帧 · " + keyCountOf(name) + " key";
+  };
+  const addItem = (name) => {
+    list.appendChild(animListItem(name, animLabel(name), metaOf(name), {
       selected: name === cur,
-      title: animLabel(name) + "（" + name + "）· " + meta,
+      title: animLabel(name) + "（" + name + "）· " + metaOf(name),
       onClick: () => setAnimEditSelection(name),
     }));
+  };
+
+  /* ---- 分组：基础动作 / 表情 / 调试（用户要求「前端只展示待机、眨眼、说话」） ---- */
+  const groups = animGroupNames(names);
+  let shown = 0;
+
+  /* 1) 基础动作：始终展开 */
+  for (const n of groups.base) { addItem(n); shown++; }
+
+  /* 2) 表情：默认收起，点标题展开 */
+  if (groups.expression.length) {
+    const open = !!state.animEdit.expandExpression;
+    const hd = el("button", "anim-group-hd");
+    hd.type = "button";
+    hd.setAttribute("aria-expanded", open ? "true" : "false");
+    hd.appendChild(el("span", "anim-group-caret", open ? "▾" : "▸"));
+    hd.appendChild(el("span", "anim-group-name", "表情"));
+    hd.appendChild(el("span", "anim-group-count", String(groups.expression.length)));
+    hd.title = open ? "收起表情动画" : "展开表情动画（" + groups.expression.length + " 个）";
+    hd.addEventListener("click", () => {
+      state.animEdit.expandExpression = !open;
+      renderAnimIdleList();
+    });
+    list.appendChild(hd);
+    if (open) {
+      for (const n of groups.expression) { addItem(n); shown++; }
+    } else if (groups.expression.indexOf(cur) >= 0) {
+      /* 当前选中的是表情但列表收起 → 仍然显示它，否则用户看不出在播哪个 */
+      addItem(cur);
+      shown++;
+    }
   }
-  return names.length;
+
+  /* 3) 调试用动画：默认收起，且用灰字标明 */
+  if (groups.debug.length) {
+    const open = !!state.animEdit.expandDebug;
+    const hd = el("button", "anim-group-hd is-debug");
+    hd.type = "button";
+    hd.setAttribute("aria-expanded", open ? "true" : "false");
+    hd.appendChild(el("span", "anim-group-caret", open ? "▾" : "▸"));
+    hd.appendChild(el("span", "anim-group-name", "调试"));
+    hd.appendChild(el("span", "anim-group-count", String(groups.debug.length)));
+    hd.title = "开发调试用动画（视线网格预览等），一般不需要";
+    hd.addEventListener("click", () => {
+      state.animEdit.expandDebug = !open;
+      renderAnimIdleList();
+    });
+    list.appendChild(hd);
+    if (open) {
+      for (const n of groups.debug) { addItem(n); shown++; }
+    }
+  }
+  return shown;
+}
+
+/**
+ * 把动画名分成三组。
+ *   基础动作：待机 / 眨眼 / 说话 —— 用户明确要求前端只展示这三个
+ *   表情：其余的角色表演动画（开心/难过/害羞…）
+ *   调试：视线网格预览这类开发用动画
+ */
+function animGroupNames(names) {
+  const BASE = ["idle", "blink", "talk_generic"];
+  const DEBUG = ["gaze_grid_preview"];
+  const base = [];
+  const expression = [];
+  const debug = [];
+  for (const n of names) {
+    if (DEBUG.indexOf(n) >= 0) { debug.push(n); continue; }
+    if (BASE.indexOf(n) >= 0) { base.push(n); continue; }
+    expression.push(n);
+  }
+  /* 基础动作按固定顺序（待机→眨眼→说话），不跟随底层键序 */
+  base.sort((a, b) => BASE.indexOf(a) - BASE.indexOf(b));
+  return { base, expression, debug };
 }
 
 /**
@@ -6242,6 +6315,350 @@ function animSequenceEntries() {
  * 动画分页总渲染（替代原来的 renderAnimTracks 调用点）。
  * 保留轨道区（animBones/animSlots 若存在则照旧渲染；不存在就跳过，不再抛错）。
  */
+/*
+ * 音频 → 嘴型动画：UI/集成层
+ *
+ * 流程：
+ *   1) 取当前选中台词的 .ogg（复用 voiceLineUrl）
+ *   2) decodeAudioWave 解码 → 峰值包络（audio-wave.js）
+ *   3) SpineLipSync.build → 口型关键帧（lip-sync.js）
+ *   4) 写进一个**新动画** talk_<台词id>（不动原始 21 个动画）
+ *
+ * 不直接改真实包：生成后先放在内存草稿里，由用户决定是否保存。
+ */
+
+/*
+ * 口型测试台：让用户能「听声音 + 看嘴动」，而不是看数据。
+ *
+ * 做法：
+ *   1) 生成口型关键帧（lip-sync）
+ *   2) 写进临时动画 talk_test
+ *   3) 同时播放：音频 <audio> 播放 + 编辑器时间轴按真实时间推进
+ *   4) 用户能听到声音、看到角色嘴型跟着动
+ *
+ * 为什么不用编辑器自带的播放：它的播放是固定帧率推进，与音频不同步；
+ * 这里用 audio.currentTime 驱动播放头，保证「听到什么就看到什么」。
+ */
+
+let _lipTest = null;   /* { animName, audio, raf, savedAnim } */
+
+/**
+ * 把视图放大到脸部（口型测试专用）。
+ *
+ * **为什么需要**：嘴巴在整身视图里只有 23×6 世界单位，默认缩放 0.5 时
+ * 屏幕上仅约 11×3 px（张嘴时约 11×10 px）—— 实测截图确认变化真实存在，
+ * 但用户在整身视图里几乎看不出来，会误判成「没动」。
+ * 所以测试期间自动把镜头推到脸部，结束再恢复原视图。
+ *
+ * 变换约定（见 viewParams）：tx = viewW/2 + panX，ty = viewH/2 - panY。
+ * 因此要让世界点 (cx, cy) 居中，panX = -cx*z、panY = -cy*z（与 fitView 一致）。
+ *
+ * @returns {{zoom:number, panX:number, panY:number}|null} 原视图，供恢复
+ */
+function lipTestFocusFace() {
+  const mouthIdx = state.slots.findIndex((s) => s.name === "嘴巴");
+  if (mouthIdx < 0) return null;
+  const f = state.frame || (typeof framePose === "function" ? framePose() : null);
+  if (!f || !f.geo) return null;
+  const g = f.geo.find((x) => x.slotIndex === mouthIdx);
+  if (!g || !g.bounds) return null;
+
+  const b = g.bounds;
+  const cx = (b.minX + b.maxX) / 2;
+  const cy = (b.minY + b.maxY) / 2;
+  const mouthW = Math.max(4, b.maxX - b.minX);
+
+  /* 以嘴巴为中心取一块区域：宽度给 7 倍嘴宽（能带上一点脸颊与鼻尖），
+     高度按画布比例换算，避免拉伸。 */
+  const regionW = mouthW * 7;
+  const regionH = regionW * (viewH() / Math.max(1, viewW()));
+  const pad = 20;
+  const availW = Math.max(40, viewW() - pad * 2);
+  const availH = Math.max(40, viewH() - pad * 2);
+  const z = clamp(Math.min(availW / regionW, availH / regionH), 0.02, 12);
+
+  const old = { zoom: state.zoom, panX: state.panX, panY: state.panY };
+  state.zoom = z;
+  state.panX = -cx * z;
+  state.panY = -cy * z;
+  if (typeof syncZoom === "function") syncZoom();
+  render();
+  return old;
+}
+
+/** 取当前台词对象 */
+function lipTestLine(lineId) {  const v = state.voice;
+  const id = lineId || (v && v.play ? v.play.id : null);
+  if (!id) return null;
+  for (const ev of v.events || []) {
+    for (const ln of ev.lines || []) {
+      if (ln && ln.id === id) return ln;
+    }
+  }
+  return null;
+}
+
+/** 停止口型测试（恢复原动画、停音频、停循环） */
+function lipTestStop(opts) {
+  const o = opts || {};
+  if (!_lipTest) return { ok: true, already: true };
+  const t = _lipTest;
+  _lipTest = null;
+  if (t.raf) cancelAnimationFrame(t.raf);
+  if (t.audio) {
+    try { t.audio.pause(); } catch (_) { /* 忽略 */ }
+  }
+  state.playing = false;
+  syncPlayButton();
+  /* 恢复脸部放大前的视图 */
+  if (t.savedView && !o.keepView) {
+    state.zoom = t.savedView.zoom;
+    state.panX = t.savedView.panX;
+    state.panY = t.savedView.panY;
+    if (typeof syncZoom === "function") syncZoom();
+    render();
+  }
+  /* 复位「停止测试」按钮 */
+  const stopBtn = el0("voiceLipStop");
+  if (stopBtn) stopBtn.disabled = true;
+  /* 恢复测试前的动画 */
+  if (t.savedAnim && !o.keep) {
+    try { setAnim(t.savedAnim); } catch (_) { /* 忽略 */ }
+  }
+  if (!o.silent) setStatus("口型测试已停止");
+  return { ok: true, stopped: true };
+}
+
+/**
+ * 一键测试：生成口型 → 写临时动画 → 音画同步播放。
+ * @param {{lineId?:string, fps?:number, silenceThreshold?:number, smooth?:boolean}} opts
+ */
+async function lipTestRun(opts) {
+  const o = opts || {};
+  lipTestStop({ silent: true });
+
+  const line = lipTestLine(o.lineId);
+  if (!line) return { ok: false, reason: "先在台词页选中一条台词" };
+
+  /* 1) 生成关键帧 */
+  const gen = await lipSyncFromCurrentLine({
+    lineId: line.id,
+    fps: o.fps,
+    silenceThreshold: o.silenceThreshold,
+    smooth: o.smooth,
+  });
+  if (!gen.ok) {
+    setStatus("口型测试失败：" + gen.reason, "warn");
+    return gen;
+  }
+
+  /* 2) 写成临时动画（名字固定，避免污染列表；每次覆盖） */
+  const TEST_NAME = "__lip_test__";
+  const lib = animEditLib();
+  if (!lib) return { ok: false, reason: "anim-edit 未加载" };
+  /* 同 lipSyncApplyToAnim：直接构造数组（upsertKey 受 animDurationOf 限制写不进多 Key） */
+  const keys = gen.keys
+    .filter((k) => Number.isFinite(k.time) && k.time >= 0 && k.name)
+    .map((k) => ({ time: Math.round(k.time * 1e6) / 1e6, name: k.name }))
+    .sort((a, b) => a.time - b.time);
+  if (!keys.length) return { ok: false, reason: "没有合法的口型关键帧" };
+  const draft = {
+    slots: {},
+    duration: Number.isFinite(gen.duration) && gen.duration > 0
+      ? Math.round(gen.duration * 1e6) / 1e6
+      : keys[keys.length - 1].time,
+  };
+  draft.slots["嘴巴"] = { attachment: keys };
+  const wrote = keys.length;
+
+  const savedAnim = state.anim;
+  animSetDraft(TEST_NAME, draft);
+  setAnim(TEST_NAME);
+  syncAnimPanel();
+
+  /* 3) 音画同步播放 */
+  const url = audioWaveUrlForLine(line);
+  if (!url) {
+    setStatus("口型已生成，但找不到音频地址，无法同步播放", "warn");
+    return Object.assign({}, gen, { ok: true, played: false, wrote: wrote });
+  }
+  const audio = new Audio(url);
+  audio.preload = "auto";
+  /* 放大到脸部：否则嘴巴在整身视图里只有几像素，用户会以为「没动」 */
+  const savedView = lipTestFocusFace();
+  _lipTest = { animName: TEST_NAME, audio: audio, raf: 0, savedAnim: savedAnim, savedView: savedView };
+  /* 临时诊断：记录音频生命周期，定位「点了没反应」 */
+  state.__lipDebug = { url: String(url).slice(0, 160), events: [], playOk: null, playErr: null };
+  for (const ev of ["loadstart", "loadedmetadata", "canplay", "playing", "ended", "error", "stalled"]) {
+    audio.addEventListener(ev, () => {
+      state.__lipDebug.events.push(ev + "@" + (+audio.currentTime.toFixed(3)) + " dur=" + audio.duration + " err=" + (audio.error ? audio.error.code : "null"));
+    });
+  }
+
+  const drive = () => {
+    if (!_lipTest || _lipTest.audio !== audio) return;
+    const dur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : gen.duration;
+    const t = Math.min(dur, audio.currentTime || 0);
+    /* 直接改 state.t 并重绘（不走 setPlayhead，避免暂停音频） */
+    state.t = t;
+    state.playing = true;
+    updateTimeLabel();
+    render();
+    if (typeof dsSyncPlayhead === "function") dsSyncPlayhead();
+    _lipTest.raf = requestAnimationFrame(drive);
+  };
+
+  audio.addEventListener("ended", () => {
+    if (!_lipTest) return;
+    lipTestStop({ silent: true });
+    setStatus("口型测试播放完毕：" + gen.keys.length + " 个口型关键帧 · " + round(gen.duration, 2) + "s");
+  });
+  audio.addEventListener("error", () => {
+    if (!_lipTest) return;
+    lipTestStop({ silent: true });
+    setStatus("音频加载失败，无法测试", "warn");
+  });
+
+  try {
+    await audio.play();
+    if (state.__lipDebug) state.__lipDebug.playOk = true;
+  } catch (e) {
+    if (state.__lipDebug) { state.__lipDebug.playOk = false; state.__lipDebug.playErr = String((e && e.message) || e).slice(0, 120); }
+    lipTestStop({ silent: true });
+    return { ok: false, reason: "音频播放被拒绝（浏览器策略？）：" + String((e && e.message) || e).slice(0, 60) };
+  }
+  _lipTest.raf = requestAnimationFrame(drive);
+
+  setStatus("口型测试中：「" + (line.text || line.id).slice(0, 18) + "」" +
+    gen.keys.length + " 个口型 · " + round(gen.duration, 2) + "s —— 听声音看嘴型");
+  /* 按钮状态：测试开始后启用「停止测试」，结束后复位 */
+  const stopBtn = el0("voiceLipStop");
+  if (stopBtn) stopBtn.disabled = false;
+  return Object.assign({}, gen, { ok: true, played: true, wrote: wrote, testAnim: TEST_NAME });
+}
+
+function lipSyncLib() { return window.SpineLipSync || null; }
+
+/** 当前选中台词的 id（沿用语音模块的查找链路） */
+function lipSyncLineId() {
+  const v = state.voice;
+  if (!v || !v.play || !v.play.id) return null;
+  return v.play.id;
+}
+
+/** 生成目标动画名：talk_<台词id> */
+function lipSyncAnimName(lineId) {
+  const base = String(lineId || "").replace(/[^A-Za-z0-9_]/g, "_").slice(0, 48);
+  return "talk_" + (base || "line");
+}
+
+/**
+ * 核心：把当前台词的音频转成口型关键帧（不写盘）。
+ * @returns {Promise<{ok:boolean, keys?:Array, duration?:number, fps?:number, reason?:string, lineId?:string}>}
+ */
+async function lipSyncFromCurrentLine(opts) {
+  const o = opts || {};
+  const L = lipSyncLib();
+  if (!L) return { ok: false, reason: "lip-sync.js 未加载" };
+
+  const lineId = o.lineId || lipSyncLineId();
+  if (!lineId) return { ok: false, reason: "先在台词页选中一条台词" };
+
+  /* 找台词对象 */
+  const v = state.voice;
+  let line = null;
+  for (const ev of v.events || []) {
+    for (const ln of ev.lines || []) {
+      if (ln && ln.id === lineId) { line = ln; break; }
+    }
+    if (line) break;
+  }
+  if (!line) return { ok: false, reason: "找不到台词：" + lineId };
+
+  const url = audioWaveUrlForLine(line);
+  if (!url) return { ok: false, reason: "这条台词没有可用的音频地址" };
+
+  /* 解码（复用 audio-wave 的缓存与解码） */
+  const wave = await decodeAudioWave(url, 2000);
+  if (!wave || !wave.ok) return { ok: false, reason: (wave && wave.reason) || "音频解码失败" };
+
+  const fps = Number.isFinite(o.fps) && o.fps > 0 ? o.fps : tlFps();
+  const built = L.build({
+    peaks: wave.peaks,
+    duration: wave.duration,
+    fps: fps,
+    silenceThreshold: Number.isFinite(o.silenceThreshold) ? o.silenceThreshold : 0.06,
+    smooth: o.smooth !== false,
+    maxInsertPerStep: Number.isFinite(o.maxInsertPerStep) ? o.maxInsertPerStep : 3,
+  });
+  if (!built.ok) return { ok: false, reason: built.issues[0] ? built.issues[0].message : "口型生成失败" };
+
+  return {
+    ok: true,
+    lineId: lineId,
+    animName: lipSyncAnimName(lineId),
+    keys: built.keys,
+    frames: built.frames,
+    inserted: built.inserted,
+    duration: wave.duration,
+    fps: fps,
+    channels: wave.channels,
+    summary: L.summaryLine(built),
+  };
+}
+
+/**
+ * 把生成的口型关键帧写成一个新动画（内存草稿，不自动保存）。
+ * 只写 slots.<嘴> .attachment 轨道，不动骨骼。
+ */
+function lipSyncApplyToAnim(result) {
+  const lib = animEditLib();
+  if (!lib) return { ok: false, reason: "anim-edit 未加载" };
+  if (!result || !result.ok || !result.keys || !result.keys.length) {
+    return { ok: false, reason: "没有可写入的口型关键帧" };
+  }
+  const name = result.animName;
+  const fps = result.fps || tlFps();
+  const MOUTH = "嘴巴";
+
+  /* 以空动画为底：只有 slots.嘴巴.attachment 一条轨道。
+     **不用 upsertKey**：它内部的 animDurationOf 只认「已有 Key 的最大时间」，
+     空草稿时长恒为 0，任何 time>0 的 Key 都会被 ANIM_KEY_OVER_DURATION 拒绝
+     （实测：75 个 Key 只写进 time=0 那一个，倒序写也一样）。
+     这个结构很简单，直接构造数组即可；写完再让 animSetDraft 走正常链路。 */
+  const keys = result.keys
+    .filter((k) => Number.isFinite(k.time) && k.time >= 0 && k.name)
+    .map((k) => ({ time: Math.round(k.time * 1e6) / 1e6, name: k.name }))
+    .sort((a, b) => a.time - b.time);
+  if (!keys.length) return { ok: false, reason: "没有合法的口型关键帧" };
+
+  const draft = {
+    slots: {},
+    duration: Number.isFinite(result.duration) && result.duration > 0
+      ? Math.round(result.duration * 1e6) / 1e6
+      : keys[keys.length - 1].time,
+  };
+  draft.slots[MOUTH] = { attachment: keys };
+  const wrote = keys.length;
+
+  const before = snapshot();
+  animSetDraft(name, draft);
+  commit(before);
+  setAnim(name);
+  syncAnimPanel();
+  renderAnimIdleList();
+  setStatus("已生成口型动画「" + animLabel(name) + "」：" + wrote + " 个关键帧 · " + round(result.duration, 2) + "s（内存草稿，未保存）");
+  return { ok: true, animName: name, wrote: wrote, duration: result.duration };
+}
+
+/** 一键：当前台词 → 生成口型动画（供按钮/句柄调用） */
+async function lipSyncGenerate(opts) {
+  const r = await lipSyncFromCurrentLine(opts);
+  if (!r.ok) { setStatus("口型生成失败：" + r.reason, "warn"); return r; }
+  const applied = lipSyncApplyToAnim(r);
+  return Object.assign({}, r, { applied: applied });
+}
+
 function renderAnimPage() {
   const panel = el0("animPanel");
   if (!panel) return;
@@ -21613,6 +22030,31 @@ function flashBlankFrame(opts) {
       setVoiceHint("已停止语音");
       setStatus("已停止语音");
     });
+    /* 口型测试：生成当前台词的口型动画并音画同步播放 */
+    const lipTestBtn = el0("voiceLipTest");
+    if (lipTestBtn) {
+      lipTestBtn.addEventListener("click", async () => {
+        const stopBtn = el0("voiceLipStop");
+        lipTestBtn.disabled = true;
+        try {
+          const r = await lipTestRun();
+          if (r && r.ok && r.played) {
+            if (stopBtn) stopBtn.disabled = false;
+          } else if (r && !r.ok) {
+            setStatus("口型测试失败：" + (r.reason || "未知原因"), "warn");
+          }
+        } finally {
+          lipTestBtn.disabled = false;
+        }
+      });
+    }
+    const lipStopBtn = el0("voiceLipStop");
+    if (lipStopBtn) {
+      lipStopBtn.addEventListener("click", () => {
+        lipTestStop();
+        lipStopBtn.disabled = true;
+      });
+    }
     el0("voiceSeek").addEventListener("input", (e) => {
       const v = state.voice;
       const a = voiceAudioEl();
@@ -22568,6 +23010,11 @@ function flashBlankFrame(opts) {
       frameTool: (tool) => (tool === undefined ? { tool: fsFrameTool() } : fsSetFrameTool(tool)),
       copyFrameRange: () => fsCopyRangeToClipboard(),
       duplicateFrameRange: (delta) => fsDuplicateRange(delta),
+      /* 音频 → 口型动画（动态映射）：预览关键帧 / 生成动画 */
+      lipSyncPreview: (opts) => lipSyncFromCurrentLine(opts),
+      lipSyncGenerate: (opts) => lipSyncGenerate(opts),
+      lipTestRun: (opts) => lipTestRun(opts),
+      lipTestStop: (opts) => lipTestStop(opts),
       /* 诊断：F5/F6/F7 的帧匹配到底看到了什么（排查「有 Key 却说没有」用） */
       flashDebug: () => {
         const fps = tlFps();
