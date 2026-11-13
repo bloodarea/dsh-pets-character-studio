@@ -77,6 +77,15 @@
   ok("maxCount=10 生效", pMax.frames.length <= 10, String(pMax.frames.length));
   eq("maxCount 时末帧仍对齐", pMax.frames[pMax.frames.length - 1], 1000);
 
+  /* 变异测试发现的盲区：上面的用例走不到「硬截断」那行（step 取整已保证不超限），
+     所以那行是死代码、断言是假守卫。这里**显式喂一个极小的 step 配大范围**，
+     让循环真的产出超过 maxCount 的帧数，才能覆盖截断逻辑。 */
+  var pTight = T.planFrames({ fromFrame: 0, toFrame: 100, step: 1, maxCount: 5 });
+  eq("显式 step=1 + maxCount=5 时被硬截断到 5", pTight.frames.length, 5);
+  eq("硬截断后 truncated 为 true", pTight.truncated, true);
+  ok("硬截断后仍不超过 maxCount", pTight.frames.length <= 5, String(pTight.frames.length));
+  eq("硬截断保留首帧", pTight.frames[0], 0);
+
   /* ================================================================== *
    * 2. 缓存键
    * ================================================================== */

@@ -44,11 +44,17 @@
     else if (total > maxCount) step = Math.ceil(total / maxCount);
     const frames = [];
     for (let f = lo; f <= hi; f += step) frames.push(f);
-    /* 末帧补上，保证视觉上有终点锚 */
+    /* 末帧补上，保证视觉上有终点锚。
+       注意：只有「还没到上限」时才 push，否则用末帧替换最后一个 —— 这样
+       frames.length 永远不会超过 maxCount，下面的截断就成了纯保险。 */
     if (frames.length && frames[frames.length - 1] !== hi) {
       if (frames.length >= maxCount && frames.length > 1) frames[frames.length - 1] = hi;
       else frames.push(hi);
     }
+    /* 保险：显式 step 过小或浮点误差可能让数量超限，这里硬截断。
+       **注意**：正常路径下这一行是死代码（上面的 step 取整已保证不超限），
+       所以自检里另加了一条「直接喂小 step + 大范围」的用例来覆盖它 ——
+       否则变异测试会证明它是假守卫（实测如此）。 */
     const truncated = frames.length > maxCount;
     if (truncated) frames.length = maxCount;
     return { ok: true, frames: frames, step: step, truncated: truncated, issues: [] };
