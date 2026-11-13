@@ -6635,6 +6635,11 @@ function eventExpressionOf(lineId) {
   return ev && ev.expression && typeof ev.expression === "object" ? ev.expression : null;
 }
 
+/** 事件是否把嘴巴显式声明为 null（区别于「未声明」） */
+function exprPartsDeclaresMouthNull(parts) {
+  return !!parts && Object.prototype.hasOwnProperty.call(parts, "嘴巴") && parts["嘴巴"] == null;
+}
+
 /**
  * 用事件表情合成：骨骼用 idle 平铺，槽用事件表情，嘴巴走口型 + 末尾回事件嘴型。
  * @param {object} exprParts 事件 expression（左眼、右眼、眉毛_左、眉毛_右、眨眼_左/右、嘴巴…）
@@ -6669,6 +6674,12 @@ function lipSyncMergeFromEvent(exprParts, lip) {
   for (const slotName of Object.keys(slots)) {
     const val = slots[slotName];
     if (slotName === "嘴巴") { exprMouth = val; continue; }
+    /* 嘴巴声明为 null 的事件：嘴巴特效（mouth_嘘_气）会把「张嘴」盖住 → 说话期间隐藏 */
+    if (slotName === "嘴巴特效" && exprPartsDeclaresMouthNull(exprParts)) {
+      anim.slots[slotName] = { attachment: [{ time: 0, name: null }, { time: dur, name: null }] };
+      baseTracks++;
+      continue;
+    }
     if (val == null) {
       /* null = 该槽不显示附件；仍然写轨道，保证与表情页表现一致 */
       anim.slots[slotName] = { attachment: [{ time: 0, name: null }, { time: dur, name: null }] };
@@ -6678,8 +6689,14 @@ function lipSyncMergeFromEvent(exprParts, lip) {
     anim.slots[slotName] = { attachment: [{ time: 0, name: val }, { time: dur, name: val }] };
     baseTracks++;
   }
-  /* 事件没声明嘴巴时，退回无表情（不是静音档，是中性嘴） */
-  const tailMouth = exprMouth == null ? "mouth_无表情" : exprMouth;
+  /* **事件把嘴巴显式声明为 null 时**（long_idle / reconnected / task_timeout 这 3 个：
+     它们的表情是「嘴不显示 + 嘴巴特效 mouth_嘘_气」的呼气造型），
+     口型驱动嘴巴后，mouth_嘘_气 会叠在张开的嘴上 —— 用户反馈的「叠加的嘴巴」。
+     所以这两种情况都按事件的真实语义处理：
+       · 说话期间把 嘴巴特效 隐藏（呼气造型不属于说话状态）
+       · 末尾把嘴恢复成事件声明的 null（不是无表情），与事件一致 */
+  const declaredMouthNull = !!exprParts && Object.prototype.hasOwnProperty.call(exprParts, "嘴巴") && exprParts["嘴巴"] == null;
+  const tailMouth = declaredMouthNull ? null : (exprMouth == null ? "mouth_无表情" : exprMouth);
 
   /* 3) 嘴巴：口型关键帧 + 末尾回事件嘴型（契约 ⑤「结束后才恢复情绪嘴」） */
   const mouthKeys = lip.keys
@@ -6854,6 +6871,37 @@ function lipTestFocusFace() {
   if (typeof syncZoom === "function") syncZoom();
   render();
   return old;
+}
+
+/**
+ * 静态预览：把「事件表情 + 口型」混合后装进编辑器（不播音频）。
+ * 用途：不播放时检查某时刻的合成结果，也让 T4/截图可以定格取证。
+ * @param {{lineId?:string, fps?:number}} opts
+ */
+async function lipPreviewStatic(opts) {
+  const o = opts || {};
+  lipTestStop({ silent: true });
+  const line = lipTestLine(o.lineId);
+  if (!line) return { ok: false, reason: "先在台词页选中一条台词" };
+  const gen = await lipKeysForLine(line, { fps: o.fps, silenceThreshold: o.silenceThreshold, smooth: o.smooth });
+  if (!gen.ok) return gen;
+  const TEST_NAME = "__lip_test__";
+  const exprParts = eventExpressionOf(line.id);
+  const merged = exprParts
+    ? lipSyncMergeFromEvent(exprParts, gen)
+    : lipSyncMerge((state.anim && state.anim !== TEST_NAME ? state.anim : "idle"), gen);
+  if (!merged.ok) return { ok: false, reason: merged.reason || "混合失败" };
+  animSetDraft(TEST_NAME, merged.anim);
+  setAnim(TEST_NAME);
+  syncAnimPanel();
+  const view = lipTestFocusFace();
+  _lipTest = { animName: TEST_NAME, audio: null, raf: 0, savedAnim: null, savedView: view, static: true, lineId: line.id };
+  state.playing = false;
+  return {
+    ok: true, static: true, animName: TEST_NAME,
+    duration: merged.duration, mouthKeys: merged.mouthKeys, mouthTail: merged.mouthTail,
+    hasEyeLayer: merged.hasEyeLayer, boneTracks: merged.boneTracks,
+  };
 }
 
 /**
