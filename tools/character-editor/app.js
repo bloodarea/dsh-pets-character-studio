@@ -6603,6 +6603,106 @@ function lipsyncSummary() {
     (issues.length ? " · " + issues.length + " 项不合规" : " · 校验通过");
 }
 
+/*
+ * 以「事件声明的表情」为基础合成口型动画
+ *
+ * **为什么必须走事件**：events.json 里每个事件都带 expression：
+ *   { "id":"all_completed", "expression":{ "左眼":"whole_L_星星眼", ...,
+ *                                          "嘴巴":"mouth_快乐" } }
+ * 契约 §3.3 第374行②也要求运行时「应用 eventMap 的脸部 base」，
+ * ⑤ 要求结束后「恢复当时 base 表情嘴」。
+ * 所以基础嘴型是**事件声明的那一个**（如 mouth_快乐），
+ * 不是从动画名（happy/proud…）反推 —— 两者并不总是一致（proud 是 愉快）。
+ */
+
+/** 取某条台词所属的事件对象（台词挂载在 event.lines 上） */
+function eventOfLine(lineId) {
+  const v = state.voice;
+  if (!v || !Array.isArray(v.events) || !lineId) return null;
+  for (const ev of v.events) {
+    const lines = ev && Array.isArray(ev.lines) ? ev.lines : [];
+    for (const ln of lines) {
+      if (!ln) continue;
+      if (ln.id === lineId || ln.audioId === lineId) return ev;
+    }
+  }
+  return null;
+}
+
+/** 事件声明的表情部位（无则 null） */
+function eventExpressionOf(lineId) {
+  const ev = eventOfLine(lineId);
+  return ev && ev.expression && typeof ev.expression === "object" ? ev.expression : null;
+}
+
+/**
+ * 用事件表情合成：骨骼用 idle 平铺，槽用事件表情，嘴巴走口型 + 末尾回事件嘴型。
+ * @param {object} exprParts 事件 expression（左眼、右眼、眉毛_左、眉毛_右、眨眼_左/右、嘴巴…）
+ * @param {{keys:Array,duration:number}} lip
+ */
+function lipSyncMergeFromEvent(exprParts, lip) {
+  const raw = state.raw;
+  if (!raw || !raw.animations) return { ok: false, reason: "没有载入动画数据" };
+  if (!lip || !Array.isArray(lip.keys) || !lip.keys.length) return { ok: false, reason: "没有口型关键帧" };
+  const dur = Number.isFinite(lip.duration) && lip.duration > 0
+    ? Math.round(lip.duration * 1e6) / 1e6
+    : Math.round(lip.keys[lip.keys.length - 1].time * 1e6) / 1e6;
+
+  const anim = { bones: {}, slots: {}, duration: dur };
+
+  /* 1) 骨骼：idle 平铺循环，说话期间保持呼吸 */
+  const idle = raw.animations.idle;
+  if (idle && idle.bones) {
+    for (const bone of Object.keys(idle.bones)) {
+      const fields = idle.bones[bone];
+      if (!fields || typeof fields !== "object") continue;
+      anim.bones[bone] = {};
+      for (const field of Object.keys(fields)) anim.bones[bone][field] = lipTileKeys(fields[field], dur);
+    }
+  }
+
+  /* 2) 槽：事件表情 → 固定附件轨道（除嘴巴）。
+     用 exprSlotsFromParts 复用表情页同一套映射，避免两处漂移。 */
+  const slots = typeof exprSlotsFromParts === "function" ? exprSlotsFromParts(exprParts || {}, {}) : {};
+  let baseTracks = 0;
+  let exprMouth = null;
+  for (const slotName of Object.keys(slots)) {
+    const val = slots[slotName];
+    if (slotName === "嘴巴") { exprMouth = val; continue; }
+    if (val == null) {
+      /* null = 该槽不显示附件；仍然写轨道，保证与表情页表现一致 */
+      anim.slots[slotName] = { attachment: [{ time: 0, name: null }, { time: dur, name: null }] };
+      baseTracks++;
+      continue;
+    }
+    anim.slots[slotName] = { attachment: [{ time: 0, name: val }, { time: dur, name: val }] };
+    baseTracks++;
+  }
+  /* 事件没声明嘴巴时，退回无表情（不是静音档，是中性嘴） */
+  const tailMouth = exprMouth == null ? "mouth_无表情" : exprMouth;
+
+  /* 3) 嘴巴：口型关键帧 + 末尾回事件嘴型（契约 ⑤「结束后才恢复情绪嘴」） */
+  const mouthKeys = lip.keys
+    .filter((k) => Number.isFinite(k.time) && k.time >= 0 && k.name && k.time < dur - 1e-9)
+    .map((k) => ({ time: Math.round(k.time * 1e6) / 1e6, name: k.name }));
+  mouthKeys.push({ time: dur, name: tailMouth });
+  const byTime = new Map();
+  for (const k of mouthKeys) byTime.set(k.time, k);
+  anim.slots["嘴巴"] = { attachment: Array.from(byTime.values()).sort((a, b) => a.time - b.time) };
+
+  return {
+    ok: true,
+    anim: anim,
+    mouthTail: tailMouth,
+    baseTracks: baseTracks,
+    hasEyeLayer: baseTracks > 0,
+    boneTracks: Object.keys(anim.bones).length,
+    mouthKeys: anim.slots["嘴巴"].attachment.length,
+    duration: dur,
+    fromEvent: true,
+  };
+}
+
 function lipClone(v) {
   return v == null ? v : JSON.parse(JSON.stringify(v));
 }
@@ -6768,6 +6868,15 @@ function lipBaseFillOptions() {
   const raw = state.raw;
   const keep = sel.value;
   sel.textContent = "";
+  const make = (v, label) => {
+    const op = document.createElement("option");
+    op.value = v;
+    op.textContent = label;
+    sel.appendChild(op);
+  };
+  /* 默认项：用台词所属事件声明的 expression（契约 §3.3 ②/⑤）。
+     只有用户想临时换表情时才从下面的动画列表里挑。 */
+  make("", "事件表情（默认）");
   const opts = [];
   for (const n of raw && raw.animations ? Object.keys(raw.animations) : []) {
     if (n === "__lip_test__" || n.indexOf("talk_") === 0) continue;
@@ -6778,14 +6887,9 @@ function lipBaseFillOptions() {
       opts.push({ v: n, label: animLabel(n) + (eyeish > 0 ? "" : "（无表情层）") });
     }
   }
-  for (const o of opts) {
-    const op = document.createElement("option");
-    op.value = o.v;
-    op.textContent = o.label;
-    sel.appendChild(op);
-  }
-  if (opts.length) sel.value = opts.some((x) => x.v === keep) ? keep : "idle";
-  return opts.length;
+  for (const o of opts) make(o.v, o.label);
+  sel.value = keep && (keep === "" || opts.some((x) => x.v === keep)) ? keep : "";
+  return opts.length + 1;
 }
 
 /**
@@ -6798,11 +6902,20 @@ async function lipPreviewStatic(opts) {
   lipTestStop({ silent: true });
   const line = lipTestLine(o.lineId);
   if (!line) return { ok: false, reason: "先在台词页选中一条台词" };
-  const gen = await lipSyncFromCurrentLine({ lineId: line.id, fps: o.fps, silenceThreshold: o.silenceThreshold, smooth: o.smooth });
+  const gen = await lipKeysForLine(line, { fps: o.fps, silenceThreshold: o.silenceThreshold, smooth: o.smooth });
   if (!gen.ok) return gen;
   const TEST_NAME = "__lip_test__";
-  const baseName = o.baseAnim || (state.anim && state.anim !== TEST_NAME ? state.anim : "idle");
-  const merged = lipSyncMerge(baseName, gen);
+  /* 同 lipTestRun：优先用事件声明的 expression 作基础 */
+  const exprParts = eventExpressionOf(line.id);
+  let merged = null;
+  let baseName = null;
+  if (exprParts && !o.baseAnim) {
+    merged = lipSyncMergeFromEvent(exprParts, gen);
+    baseName = "事件表情";
+  } else {
+    baseName = o.baseAnim || (state.anim && state.anim !== TEST_NAME ? state.anim : "idle");
+    merged = lipSyncMerge(baseName, gen);
+  }
   if (!merged.ok) return { ok: false, reason: merged.reason || "混合失败" };
   animSetDraft(TEST_NAME, merged.anim);
   setAnim(TEST_NAME);
@@ -6816,6 +6929,39 @@ async function lipPreviewStatic(opts) {
     duration: merged.duration, mouthKeys: merged.mouthKeys, mouthTail: merged.mouthTail,
     hasEyeLayer: merged.hasEyeLayer, boneTracks: merged.boneTracks,
   };
+}
+
+/**
+ * 取一条台词的口型关键帧。
+ * **优先用包内 lipsync.json 的 runs**（运行时真正用的数据），取不到才退回本地包络估算。
+ * 返回里带 source 字段标明数据源，供状态栏如实显示。
+ */
+async function lipKeysForLine(line, opts) {
+  const o = opts || {};
+  const lsRes = await lipsyncLoad();
+  const lsLine = lsRes.ok ? lipsyncLineById(line.id) : null;
+  if (lsLine) {
+    const fps = Number.isFinite(o.fps) && o.fps > 0 ? o.fps : tlFps();
+    const keys = lipsyncKeysFromRuns(lsLine, fps);
+    if (keys.length) {
+      return {
+        ok: true,
+        keys: keys,
+        frames: lsLine.frames,
+        inserted: 0,
+        duration: lsLine.durationSec,
+        fps: fps,
+        source: "pack-lipsync",
+        summary: keys.length + " 个口型关键帧（来自 lipsync.json）",
+      };
+    }
+  }
+  const local = await lipSyncFromCurrentLine({
+    lineId: line.id, fps: o.fps,
+    silenceThreshold: o.silenceThreshold, smooth: o.smooth,
+  });
+  if (local && local.ok) local.source = "local-envelope";
+  return local;
 }
 
 /** 取当前台词对象 */
@@ -6880,36 +7026,12 @@ async function lipTestRun(opts) {
   const line = lipTestLine(o.lineId);
   if (!line) return { ok: false, reason: "先在台词页选中一条台词" };
 
-  /* 1) 取关键帧。**优先用包里 lipsync.json 的 runs**（运行时真正用的数据），
+  /* 1) 取关键帧：优先用包里 lipsync.json 的 runs（运行时真正用的数据），
      只有这样预览才等于运行时行为；取不到才退回本地包络估算。 */
-  let gen = null;
-  let source = "pack-lipsync";
-  const lsRes = await lipsyncLoad();
-  const lsLine = lsRes.ok ? lipsyncLineById(line.id) : null;
-  if (lsLine) {
-    const fps = Number.isFinite(o.fps) && o.fps > 0 ? o.fps : tlFps();
-    const keys = lipsyncKeysFromRuns(lsLine, fps);
-    if (keys.length) {
-      gen = {
-        ok: true,
-        keys: keys,
-        frames: lsLine.frames,
-        inserted: 0,
-        duration: lsLine.durationSec,
-        fps: fps,
-        summary: keys.length + " 个口型关键帧（来自 lipsync.json）",
-      };
-    }
-  }
-  if (!gen) {
-    source = "local-envelope";
-    gen = await lipSyncFromCurrentLine({
-      lineId: line.id,
-      fps: o.fps,
-      silenceThreshold: o.silenceThreshold,
-      smooth: o.smooth,
-    });
-  }
+  const gen = await lipKeysForLine(line, {
+    fps: o.fps, silenceThreshold: o.silenceThreshold, smooth: o.smooth,
+  });
+  const source = gen && gen.source ? gen.source : "local-envelope";
   if (!gen.ok) {
     setStatus("口型测试失败：" + gen.reason, "warn");
     return gen;
@@ -6921,8 +7043,19 @@ async function lipTestRun(opts) {
   const TEST_NAME = "__lip_test__";
   const lib = animEditLib();
   if (!lib) return { ok: false, reason: "anim-edit 未加载" };
-  const baseName = o.baseAnim || (state.anim && state.anim !== TEST_NAME ? state.anim : "idle");
-  const merged = lipSyncMerge(baseName, gen);
+  /* **基础表情优先取「事件声明的 expression」**（契约 §3.3 ② eventMap 脸部 base、⑤ 结束后恢复它）。
+     下拉只有在用户显式指定（o.baseAnim）时才覆盖 —— 否则会像之前那样
+     从动画名反推（用了 proud=愉快），而事件声明的其实是 mouth_快乐，两者不一致。 */
+  const exprParts = eventExpressionOf(line.id);
+  let merged = null;
+  let baseName = null;
+  if (exprParts && !o.baseAnim) {
+    merged = lipSyncMergeFromEvent(exprParts, gen);
+    baseName = "事件表情";
+  } else {
+    baseName = o.baseAnim || (state.anim && state.anim !== TEST_NAME ? state.anim : "idle");
+    merged = lipSyncMerge(baseName, gen);
+  }
   if (!merged.ok) return { ok: false, reason: merged.reason || "混合失败" };
   const draft = merged.anim;
   const wrote = merged.mouthKeys;
@@ -6986,7 +7119,7 @@ async function lipTestRun(opts) {
   _lipTest.raf = requestAnimationFrame(drive);
 
   setStatus("口型测试中：「" + (line.text || line.id).slice(0, 18) + "」" +
-    merged.mouthKeys + " 个口型 · " + round(gen.duration, 2) + "s · 基础「" + animLabel(baseName) + "」" +
+    merged.mouthKeys + " 个口型 · " + round(gen.duration, 2) + "s · 基础「" + baseName + "」" +
     (merged.hasEyeLayer ? "（含眼眉）" : "") + " · 说完保持 " + String(merged.mouthTail).replace("mouth_", "") +
     " · 数据源 " + (source === "pack-lipsync" ? "lipsync.json" : "本地包络") +
     " —— 听声音看嘴型");
@@ -22520,8 +22653,9 @@ function flashBlankFrame(opts) {
         const stopBtn = el0("voiceLipStop");
         lipTestBtn.disabled = true;
         try {
-          const base = el0("voiceLipBase") ? el0("voiceLipBase").value : null;
-          const r = await lipTestRun({ baseAnim: base });
+          const base = el0("voiceLipBase") ? el0("voiceLipBase").value : "";
+          /* 空值 = 用事件声明的 expression（默认）；有值才是用户显式覆盖 */
+          const r = await lipTestRun({ baseAnim: base || null });
           if (r && r.ok && r.played) {
             if (stopBtn) stopBtn.disabled = false;
           } else if (r && !r.ok) {
@@ -23504,6 +23638,10 @@ function flashBlankFrame(opts) {
       lipsyncLevelAt: (line, t, la) => lipsyncLevelAt(line, t, la),
       lipsyncKeysFromRuns: (line, fps) => lipsyncKeysFromRuns(line, fps),
       lipsyncLineById: (id) => lipsyncLineById(id),
+      eventOfLine: (id) => eventOfLine(id),
+      eventExpressionOf: (id) => eventExpressionOf(id),
+      lipKeysForLine: (line, opts) => lipKeysForLine(line, opts),
+      lipSyncMergeFromEvent: (parts, lip) => lipSyncMergeFromEvent(parts, lip),
       lipsyncPath: () => lipsyncPath(),
       lipsyncUrlCandidates: (rel) => lipsyncUrlCandidates(rel),
       lipPreviewStatic: (opts) => lipPreviewStatic(opts),
