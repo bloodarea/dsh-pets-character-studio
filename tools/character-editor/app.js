@@ -454,6 +454,8 @@
 
     /* 动画页：时间线编辑草稿（只保存显式编辑过的动画） */
     animEdit: {
+    /* 包内 spine/lipsync.json 的缓存（口型运行时包络，见 lipsync-pack 模块） */
+    lipsync: null,
       drafts: Object.create(null), // animName -> 编辑后的原始动画对象（完整、保留未知字段）
       applied: Object.create(null), // animName -> undefined（已被 /api/save-bundle 落盘的草稿）
       /* P2-04：草稿修订号。运动轨迹的采样缓存按它失效（轨迹是纯显示，不能拖慢播放） */
@@ -6149,6 +6151,12 @@ function renderAnimIdleList() {
   if (!wrap || !list) return 0;
 
   const names = state.model && state.model.animations ? Array.from(state.model.animations.keys()) : [];
+  /* 把「只在草稿里、还没保存」的动画也列出来（口型生成的 talk_* 就在这里）。
+     否则用户生成了却看不到，会以为没成功。测试用的 __lip_test__ 不列。 */
+  const draftNames = Object.keys(state.animEdit.drafts || {})
+    .filter((n) => names.indexOf(n) < 0 && n.indexOf("__") !== 0);
+  for (const n of draftNames) names.push(n);
+
   list.textContent = "";
   if (count) count.textContent = String(names.length);
   wrap.hidden = names.length === 0;
@@ -6187,7 +6195,31 @@ function renderAnimIdleList() {
   /* 1) 基础动作：始终展开 */
   for (const n of groups.base) { addItem(n); shown++; }
 
-  /* 2) 表情：默认收起，点标题展开 */
+  /* 2) 口型动画（talk_*，从台词音频生成）：独立成组，默认展开 —— 
+     用户刚点完「生成到包」，必须立刻看得到，否则会以为没成功。 */
+  if (groups.talk.length) {
+    const open = state.animEdit.expandTalk !== false;
+    const hd = el("button", "anim-group-hd");
+    hd.type = "button";
+    hd.setAttribute("aria-expanded", open ? "true" : "false");
+    hd.appendChild(el("span", "anim-group-caret", open ? "▾" : "▸"));
+    hd.appendChild(el("span", "anim-group-name", "口型"));
+    hd.appendChild(el("span", "anim-group-count", String(groups.talk.length)));
+    hd.title = open ? "收拢口型动画" : "展开口型动画（" + groups.talk.length + " 个）";
+    hd.addEventListener("click", () => {
+      state.animEdit.expandTalk = !open;
+      renderAnimIdleList();
+    });
+    list.appendChild(hd);
+    if (open) {
+      for (const n of groups.talk) { addItem(n); shown++; }
+    } else if (groups.talk.indexOf(cur) >= 0) {
+      addItem(cur);
+      shown++;
+    }
+  }
+
+  /* 3) 表情：默认收起，点标题展开 */
   if (groups.expression.length) {
     const open = !!state.animEdit.expandExpression;
     const hd = el("button", "anim-group-hd");
@@ -6243,16 +6275,20 @@ function animGroupNames(names) {
   const BASE = ["idle", "blink", "talk_generic"];
   const DEBUG = ["gaze_grid_preview"];
   const base = [];
+  const talk = [];
   const expression = [];
   const debug = [];
   for (const n of names) {
     if (DEBUG.indexOf(n) >= 0) { debug.push(n); continue; }
     if (BASE.indexOf(n) >= 0) { base.push(n); continue; }
+    /* 口型动画独立成组：talk_generic 是内置的通用说话，talk_<台词id> 是生成出来的 */
+    if (n.indexOf("talk_") === 0) { talk.push(n); continue; }
     expression.push(n);
   }
   /* 基础动作按固定顺序（待机→眨眼→说话），不跟随底层键序 */
   base.sort((a, b) => BASE.indexOf(a) - BASE.indexOf(b));
-  return { base, expression, debug };
+  talk.sort();
+  return { base: base, talk: talk, expression: expression, debug: debug };
 }
 
 /**
@@ -6371,6 +6407,202 @@ let _lipTest = null;   /* { animName, audio, raf, savedAnim } */
  */
 
 /** 深拷贝（结构简单，JSON 即可；不引外部 clone 以免依赖顺序） */
+/*
+ * lipsync.json 载入 / 校验 / 预览
+ *
+ * **为什么是这条路径**：本包的口型机制不是「烘焙成 Spine 动画」，而是运行时包络。
+ *   manifest.spine.lipsync → spine/lipsync.json
+ *   运行时按音频播放头查 runs 得到档位，直接设 mouthSlot 的附件。
+ *   契约 expr-anim-contract.md v2 §3.3 规定：
+ *     · 0≤t<durationSec 时以 floor(t/.01 + 1e-9) 查最后一个 frame≤当前帧的 run，不插值
+ *     · 实际播放查询前先加 20ms 前视（playheadLookaheadSec）
+ *     · t≥durationSec 直接返回 0（endRule）
+ *     · ended/stop/error 时清 override、恢复**当时** base 表情嘴（restore: current-expression-mouth）
+ *
+ * 本模块只读该文件，并复现上述查询语义用于预览；不改写 lipsync.json。
+ */
+
+const LIPSYNC_ALGORITHM = "rms-absolute-5level-v2";
+
+/** lipsync.json 的包内相对路径（优先 manifest/索引声明，退回 spine 目录约定） */
+function lipsyncPath() {
+  const b = state.bundle;
+  const idx = b && b.index;
+  if (idx) {
+    if (idx.spine && typeof idx.spine.lipsync === "string" && idx.spine.lipsync) return idx.spine.lipsync;
+    if (idx.files && typeof idx.files.lipsync === "string" && idx.files.lipsync) return idx.files.lipsync;
+  }
+  return "spine/lipsync.json";
+}
+
+/**
+ * 候选 URL 列表。
+ * **坑**：manifest 里写的是「相对包根」的路径（spine/lipsync.json），
+ * 而页面要的是「相对服务器根」的地址（workspace/packs/deepseek/spine/lipsync.json），
+ * 所以必须补包根前缀；直接 fetch 相对路径会 404。
+ */
+function lipsyncUrlCandidates(declared) {
+  const rel = String(declared || lipsyncPath() || "").replace(/^\/+/, "");
+  const out = [];
+  const root = typeof packRootDir === "function" ? packRootDir() : null;
+  const sdir = typeof spineDir === "function" ? spineDir() : null;
+  /* **必须有前导斜杠**：页面在 /tools/character-editor/ 下，
+     相对路径会解析成 /tools/character-editor/workspace/... 而 404。
+     实测正确地址是 /workspace/packs/deepseek/spine/lipsync.json。 */
+  if (root) out.push("/" + String(root).replace(/^\/+|\/+$/g, "") + "/" + rel);
+  if (sdir) out.push("/" + String(sdir).replace(/^\/+|\/+$/g, "") + "/" + rel.replace(/^spine\//, ""));
+  if (rel) out.push("/" + rel);
+  /* 去重保序 */
+  return out.filter((u, i) => u && u !== "/" && out.indexOf(u) === i);
+}
+
+/** 载入并缓存（同一路径只取一次；失败不抛，返回原因） */
+async function lipsyncLoad(opts) {
+  const o = opts || {};
+  const rel = o.path || lipsyncPath();
+  const cur = state.lipsync;
+  if (!o.force && cur && cur.rel === rel && cur.data) return { ok: true, cached: true, path: cur.path, rel: rel, data: cur.data };
+  const urls = o.url ? [o.url] : lipsyncUrlCandidates(rel);
+  if (!urls.length) return { ok: false, reason: "找不到 lipsync.json 的路径（包可能没有口型数据）" };
+  const tried = [];
+  for (const u of urls) {
+    tried.push(u);
+    try {
+      const res = await fetch(u, { cache: "no-cache" });
+      if (!res.ok) continue;
+      const text = await res.text();
+      const data = JSON.parse(text);
+      state.lipsync = { path: u, rel: rel, data: data, loadedAt: Date.now(), bytes: text.length };
+      return { ok: true, path: u, rel: rel, data: data, bytes: text.length };
+    } catch (e) {
+      /* 试下一个候选 */
+    }
+  }
+  state.lipsync = null;
+  return { ok: false, reason: "读取失败（试过 " + tried.join(" → ") + "）" };
+}
+
+/** 当前缓存的数据（无则 null） */
+function lipsyncData() {
+  return state.lipsync && state.lipsync.data ? state.lipsync.data : null;
+}
+
+/** 按 id 取某条台词的口型记录 */
+function lipsyncLineById(id) {
+  const d = lipsyncData();
+  if (!d || !Array.isArray(d.lines)) return null;
+  for (const l of d.lines) if (l && l.id === id) return l;
+  return null;
+}
+
+/**
+ * **运行时同语义**的档位查询。
+ * @param {object} line lipsync.lines 里的一条
+ * @param {number} t 音频播放头（秒）
+ * @param {boolean} [applyLookahead=true] 播放查询要加 20ms 前视；离线对齐可关掉
+ */
+function lipsyncLevelAt(line, t, applyLookahead) {
+  if (!line || !Array.isArray(line.runs) || !line.runs.length) return 0;
+  const hop = 0.01;
+  const tt = t + (applyLookahead === false ? 0 : 0.02);
+  const dur = Number.isFinite(line.durationSec) ? line.durationSec : 0;
+  if (dur > 0 && tt >= dur) return 0;   /* endRule: t>=durationSec → 0 */
+  if (tt < 0) return 0;
+  const frame = Math.floor(tt / hop + 1e-9);
+  let lv = 0;
+  for (const r of line.runs) {
+    if (!r || !Number.isFinite(r.frame)) continue;
+    if (r.frame <= frame) lv = r.level; else break;   /* runs 严格递增 */
+  }
+  return lv;
+}
+
+/** 档位 → 附件名（读文件自带的 attachments 映射，不写死） */
+function lipsyncAttachmentName(level) {
+  const d = lipsyncData();
+  const map = d && d.attachments ? d.attachments : null;
+  if (map && map[String(level)] != null) return map[String(level)];
+  if (level === 0) return "mouth_无表情";
+  const fallback = { 25: "mouth_张嘴_25", 50: "mouth_张嘴_50", 75: "mouth_张嘴_75", 100: "mouth_张嘴_100" };
+  return fallback[level] || "mouth_无表情";
+}
+
+/**
+ * 用 runs 采样成关键帧（相邻同档合并）。预览用；不是运行时依赖。
+ * @param {object} line
+ * @param {number} fps 采样帧率（编辑器时间轴帧率）
+ */
+function lipsyncKeysFromRuns(line, fps) {
+  const f = Number.isFinite(fps) && fps > 0 ? fps : 30;
+  const dur = Number.isFinite(line && line.durationSec) ? line.durationSec : 0;
+  if (!(dur > 0)) return [];
+  const frames = Math.max(1, Math.round(dur * f));
+  const keys = [];
+  let last = null;
+  for (let i = 0; i < frames; i++) {
+    /* 采样点用帧中心，避免 floor 边界抖动；查询本身走运行时同语义 */
+    const t = (i + 0.5) / f;
+    if (t >= dur) break;
+    const lv = lipsyncLevelAt(line, t);
+    if (lv === last) continue;
+    keys.push({ time: Math.round(t * 1e6) / 1e6, level: lv, name: lipsyncAttachmentName(lv) });
+    last = lv;
+  }
+  /* 首帧补 t=0，保证从静音开始 */
+  if (!keys.length || keys[0].time > 1e-9) keys.unshift({ time: 0, level: 0, name: lipsyncAttachmentName(0) });
+  return keys;
+}
+
+/**
+ * 契约校验（§3.3）。返回不通过项清单，空数组表示通过。
+ */
+function lipsyncValidate(data) {
+  const d = data || lipsyncData();
+  const issues = [];
+  if (!d) return [{ code: "NO_DATA", message: "没有 lipsync 数据" }];
+  if (d.schemaVersion !== 1) issues.push({ code: "SCHEMA", message: "schemaVersion 应为 1，实际 " + d.schemaVersion });
+  if (d.algorithm !== LIPSYNC_ALGORITHM) issues.push({ code: "ALGORITHM", message: "算法应为 " + LIPSYNC_ALGORITHM + "，实际 " + d.algorithm });
+  const tb = d.timebase || {};
+  if (tb.hopSec !== 0.01) issues.push({ code: "HOP", message: "hopSec 应为 0.01" });
+  if (tb.interpolation !== "step") issues.push({ code: "INTERP", message: "interpolation 应为 step" });
+  if (tb.endRule !== "t>=durationSec:level0") issues.push({ code: "ENDRULE", message: "endRule 应为 t>=durationSec:level0" });
+  if (!d.mouthSlot) issues.push({ code: "MOUTH_SLOT", message: "缺少 mouthSlot" });
+  const att = d.attachments || {};
+  for (const lv of ["0", "25", "50", "75", "100"]) {
+    if (!att[lv]) issues.push({ code: "ATTACH", message: "attachments 缺少档位 " + lv });
+  }
+  const lines = Array.isArray(d.lines) ? d.lines : null;
+  if (!lines) { issues.push({ code: "LINES", message: "lines 必须是数组" }); return issues; }
+  const seen = new Set();
+  let runBad = 0, dup = 0, firstBad = 0;
+  for (const l of lines) {
+    if (!l || typeof l.id !== "string") { issues.push({ code: "LINE_ID", message: "有记录缺少 id" }); continue; }
+    if (seen.has(l.id)) dup++; else seen.add(l.id);
+    const runs = Array.isArray(l.runs) ? l.runs : null;
+    if (!runs || !runs.length) { runBad++; continue; }
+    if (runs[0].frame !== 0 || runs[0].level !== 0) firstBad++;
+    for (let i = 1; i < runs.length; i++) {
+      const p = runs[i - 1], c = runs[i];
+      if (!Number.isInteger(c.frame) || c.frame <= p.frame) runBad++;
+      else if (c.level === p.level) runBad++;
+      else if (Number.isFinite(l.frames) && c.frame >= l.frames) runBad++;
+    }
+  }
+  if (dup) issues.push({ code: "DUP_ID", message: "重复 id " + dup + " 条" });
+  if (firstBad) issues.push({ code: "FIRST_RUN", message: firstBad + " 条首 run 不是 frame=0/level=0" });
+  if (runBad) issues.push({ code: "RUNS", message: runBad + " 处 run 不合规（需严格递增、相邻档位不同、frame<frames）" });
+  return issues;
+}
+
+/** 面板/状态栏用的一行摘要 */
+function lipsyncSummary() {
+  const s = state.lipsync;
+  if (!s || !s.data) return "未载入 lipsync.json";
+  const issues = lipsyncValidate(s.data);
+  return s.data.lines.length + " 条口型 · " + s.data.algorithm +
+    (issues.length ? " · " + issues.length + " 项不合规" : " · 校验通过");
+}
+
 function lipClone(v) {
   return v == null ? v : JSON.parse(JSON.stringify(v));
 }
@@ -6610,6 +6842,14 @@ function lipTestStop(opts) {
   }
   state.playing = false;
   syncPlayButton();
+  /* **清掉测试草稿**：契约 §3.3 规定 lipsync 是独立 sidecar、不进 model 动画，
+     留着 __lip_test__ 会让「保存」把它写进 model.json，污染包数据。 */
+  if (state.animEdit && state.animEdit.drafts && state.animEdit.drafts[t.animName]) {
+    delete state.animEdit.drafts[t.animName];
+    state.animEdit.rev = (state.animEdit.rev || 0) + 1;
+    try { if (typeof markAnimDirty === "function") markAnimDirty(t.animName); } catch (_) { /* 忽略 */ }
+    try { if (typeof renderAnimIdleList === "function") renderAnimIdleList(); } catch (_) { /* 忽略 */ }
+  }
   /* 恢复脸部放大前的视图 */
   if (t.savedView && !o.keepView) {
     state.zoom = t.savedView.zoom;
@@ -6640,13 +6880,36 @@ async function lipTestRun(opts) {
   const line = lipTestLine(o.lineId);
   if (!line) return { ok: false, reason: "先在台词页选中一条台词" };
 
-  /* 1) 生成关键帧 */
-  const gen = await lipSyncFromCurrentLine({
-    lineId: line.id,
-    fps: o.fps,
-    silenceThreshold: o.silenceThreshold,
-    smooth: o.smooth,
-  });
+  /* 1) 取关键帧。**优先用包里 lipsync.json 的 runs**（运行时真正用的数据），
+     只有这样预览才等于运行时行为；取不到才退回本地包络估算。 */
+  let gen = null;
+  let source = "pack-lipsync";
+  const lsRes = await lipsyncLoad();
+  const lsLine = lsRes.ok ? lipsyncLineById(line.id) : null;
+  if (lsLine) {
+    const fps = Number.isFinite(o.fps) && o.fps > 0 ? o.fps : tlFps();
+    const keys = lipsyncKeysFromRuns(lsLine, fps);
+    if (keys.length) {
+      gen = {
+        ok: true,
+        keys: keys,
+        frames: lsLine.frames,
+        inserted: 0,
+        duration: lsLine.durationSec,
+        fps: fps,
+        summary: keys.length + " 个口型关键帧（来自 lipsync.json）",
+      };
+    }
+  }
+  if (!gen) {
+    source = "local-envelope";
+    gen = await lipSyncFromCurrentLine({
+      lineId: line.id,
+      fps: o.fps,
+      silenceThreshold: o.silenceThreshold,
+      smooth: o.smooth,
+    });
+  }
   if (!gen.ok) {
     setStatus("口型测试失败：" + gen.reason, "warn");
     return gen;
@@ -6725,6 +6988,7 @@ async function lipTestRun(opts) {
   setStatus("口型测试中：「" + (line.text || line.id).slice(0, 18) + "」" +
     merged.mouthKeys + " 个口型 · " + round(gen.duration, 2) + "s · 基础「" + animLabel(baseName) + "」" +
     (merged.hasEyeLayer ? "（含眼眉）" : "") + " · 说完保持 " + String(merged.mouthTail).replace("mouth_", "") +
+    " · 数据源 " + (source === "pack-lipsync" ? "lipsync.json" : "本地包络") +
     " —— 听声音看嘴型");
   /* 按钮状态：测试开始后启用「停止测试」，结束后复位 */
   const stopBtn = el0("voiceLipStop");
@@ -6927,6 +7191,24 @@ function renderAnimPage() {
     if (names.length && !state.anim) setAnim(names[0]);
     /* 包刚加载完，补填口型测试的「基础表情」下拉（初始化时 state.raw 还是空的） */
     if (typeof lipBaseFillOptions === "function") lipBaseFillOptions();
+    /* 载入包内 spine/lipsync.json（口型运行时包络）并在状态栏报出校验结果 */
+    if (typeof lipsyncLoad === "function") {
+      lipsyncLoad().then((r) => {
+        const el = el0("voiceLipInfo");
+        if (r.ok) {
+          const issues = lipsyncValidate(r.data);
+          if (el) {
+            el.textContent = "口型 " + r.data.lines.length + " 条 · " + (issues.length ? issues.length + " 项不合规" : "校验通过");
+            el.title = "lipsync.json：" + r.path + (issues.length ? "\n" + issues.map((i) => i.code + ": " + i.message).join("\n") : "\n契约校验通过");
+            el.hidden = false;
+          }
+        } else if (el) {
+          el.textContent = "无 lipsync.json";
+          el.title = r.reason || "";
+          el.hidden = false;
+        }
+      }).catch(() => { /* 忽略：没有口型数据不影响其它功能 */ });
+    }
     syncAnimPanel();
   }
 
@@ -23216,6 +23498,14 @@ function flashBlankFrame(opts) {
       lipSyncPreview: (opts) => lipSyncFromCurrentLine(opts),
       lipSyncGenerate: (opts) => lipSyncGenerate(opts),
       lipSyncMerge: (base, lip, opts) => lipSyncMerge(base, lip, opts),
+      lipsyncLoad: (opts) => lipsyncLoad(opts),
+      lipsyncData: () => lipsyncData(),
+      lipsyncValidate: (d) => lipsyncValidate(d),
+      lipsyncLevelAt: (line, t, la) => lipsyncLevelAt(line, t, la),
+      lipsyncKeysFromRuns: (line, fps) => lipsyncKeysFromRuns(line, fps),
+      lipsyncLineById: (id) => lipsyncLineById(id),
+      lipsyncPath: () => lipsyncPath(),
+      lipsyncUrlCandidates: (rel) => lipsyncUrlCandidates(rel),
       lipPreviewStatic: (opts) => lipPreviewStatic(opts),
       lipBaseFillOptions: () => lipBaseFillOptions(),
       lipTestRun: (opts) => lipTestRun(opts),
