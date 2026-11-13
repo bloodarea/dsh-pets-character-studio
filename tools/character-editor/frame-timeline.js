@@ -735,7 +735,7 @@
     const fps = normFps(o.fps);
     /* 合法 op 白名单：必须在「空动画提前返回」**之前**校验。
        否则空动画 + 非法 op 会返回 ok:true，调用方误以为操作生效（实测过的契约漏洞）。 */
-    const KNOWN_OPS = ["insert", "remove", "move", "scale", "clear", "reverse", "spread"];
+    const KNOWN_OPS = ["insert", "remove", "move", "scale", "clear", "reverse", "spread", "duplicate"];
     if (KNOWN_OPS.indexOf(kind) < 0) {
       return fail("op", "FRAME_OP_UNKNOWN", "未知的时间帧操作：" + kind);
     }
@@ -861,6 +861,53 @@
           moved++;
         }
         sortByTime(col.keys);
+      }
+      return ok(moved, 0, out);
+    }
+
+    if (kind === "duplicate") {
+      /* §6.1「复制帧段」：把 [from, from+count-1] 内的 Key **复制**到 +deltaFrames 处，
+         原位置的 Key 保留（与 move 的区别就在这里）。
+         用途：Flash 式「按住 Alt 拖拽帧段」= 复制而不是移动。
+         同一轨道目标时刻已有 Key 时按 collision 策略处理（默认 skip，保留原有）。 */
+      if (!isFiniteNum(from) || count <= 0) return fail("fromFrame", "FRAME_RANGE_INVALID", "duplicate 需要有效的 fromFrame 与 count>0");
+      const deltaRaw = numOr(o.deltaFrames, o.delta);
+      if (!isFiniteNum(deltaRaw)) return fail("deltaFrames", "FRAME_DELTA_INVALID", "duplicate 需要有限数 deltaFrames");
+      const d = snapFrame(deltaRaw);
+      if (d === 0) return fail("deltaFrames", "FRAME_DELTA_ZERO", "duplicate 的位移不能为 0");
+      const hi = from + count - 1;
+      const policyDup = COLLISION_POLICY.indexOf(o.collision) >= 0 ? o.collision : "skip";
+      for (const col of outCols) {
+        /* 先收集要复制的原始 Key（浅拷贝值），避免边遍历边插入 */
+        const src = [];
+        for (const k of col.keys) {
+          const f = frameAtTime(k.time, fps);
+          if (!isFiniteNum(f) || f < from || f > hi) continue;
+          src.push({ f: f, key: k });
+        }
+        if (!src.length) continue;
+        for (const s of src) {
+          const nf = s.f + d;
+          if (nf < 0) {
+            issues.push(issue(col.path, "FRAME_DUPLICATE_BELOW_ZERO", "第 " + s.f + " 帧复制后为负，已跳过"));
+            continue;
+          }
+          const newTime = round(nf / fps, 12);
+          /* 目标时刻已有 Key：按策略处理 */
+          const exists = col.keys.some((k) => Math.abs(k.time - newTime) < 1e-9);
+          if (exists) {
+            if (policyDup === "skip") continue;
+            if (policyDup === "overwrite") {
+              col.keys = col.keys.filter((k) => Math.abs(k.time - newTime) >= 1e-9);
+            }
+          }
+          const copy = clone(s.key);
+          copy.time = newTime;
+          col.keys.push(copy);
+          moved++;
+        }
+        sortByTime(col.keys);
+        if (policyDup !== "keep-both") dedupeSameTrack(col.keys, policyDup);
       }
       return ok(moved, 0, out);
     }

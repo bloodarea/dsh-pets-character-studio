@@ -28,9 +28,9 @@
   else if (root) root.SpineEditorVersion = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   return Object.freeze({
-    version: "0.9.187",
+    version: "0.9.192",
     label: "内置人物包管理器",
-    builtAt: "2026-11-13T11:18:11.019Z",
+    builtAt: "2026-11-13T12:01:25.732Z",
     schemaVersion: 1,
     apiVersion: 1,
     milestone: "单一界面（PS/Flash/Blender 心智）",

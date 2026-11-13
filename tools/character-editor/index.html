@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>内置人物包管理器 0.3.0</title>
-<link rel="stylesheet" href="ui.css?v=0.9.187">
+<link rel="stylesheet" href="ui.css?v=0.9.192">
 </head>
 <body>
 
@@ -486,6 +486,18 @@
         <input id="dsFps" type="number" min="1" max="240" step="1" value="30" aria-label="帧率">
       </label>
       <span id="dsFrameSelStat" class="ds-frame-sel dim" title="已选帧（Ctrl 多选 / Shift 连选 / 空白拖动框选）">未选帧</span>
+      <!-- 帧选择工具（规划书 §3.3）：Flash 式「帧选择」与「框选」两种指针模式。
+           默认「帧选择」：拖动画出帧范围；「框选」：拖出矩形同时选帧与轨道（等价 Dopesheet 框选）。 -->
+      <span class="ds-segs" role="group" aria-label="帧选择工具">
+        <button id="dsFrameToolSelect" class="btn btn-sm" type="button" aria-pressed="true"
+          title="帧选择工具：在帧格上拖动画出帧范围（Flash 式）">帧选择</button>
+        <button id="dsFrameToolBox" class="btn btn-sm" type="button" aria-pressed="false"
+          title="框选工具：拖出矩形，同时选中范围内的帧与轨道 Key">框选</button>
+      </span>
+      <button id="dsFrameCopy" class="btn btn-sm" type="button"
+        title="复制当前帧范围（等价 Ctrl+C；有帧范围时优先按范围复制）">复制帧</button>
+      <button id="dsFrameDup" class="btn btn-sm" type="button"
+        title="把当前帧范围整体复制到 +1 帧处（Alt+拖拽等价）">复制到后一帧</button>
     </span>
     <span id="dsAnimName" class="mono dim">—</span>
     <label class="ds-search" title="搜索骨名 / 槽名 / 字段 / 标签（多词 AND，大小写无关）">
@@ -748,30 +760,30 @@
   </div>
 </div>
 
-<script src="version.js?v=0.9.187"></script><script src="icons.js?v=0.9.187"></script>
-<script src="spine-core.js?v=0.9.187"></script>
-<script src="bundle.js?v=0.9.187"></script>
-<script src="bone-edit.js?v=0.9.187"></script>
-<script src="track-edit.js?v=0.9.187"></script>
-<script src="pose-tools.js?v=0.9.187"></script>
-<script src="ik-aim.js?v=0.9.187"></script>
-<script src="timeline.js?v=0.9.187"></script>
-<script src="frame-timeline.js?v=0.9.187"></script>
-<script src="pose-compare.js?v=0.9.187"></script>
-<script src="key-inspector.js?v=0.9.187"></script>
-<script src="curve-presets.js?v=0.9.187"></script>
-<script src="deform-edit.js?v=0.9.187"></script>
-<script src="anim-markers.js?v=0.9.187"></script>
-<script src="frame-thumbs.js?v=0.9.187"></script>
-<script src="audio-wave.js?v=0.9.187"></script>
-<script src="curve-edit.js?v=0.9.187"></script>
-<script src="batch-edit.js?v=0.9.187"></script>
-<script src="keymap.js?v=0.9.187"></script>
-<script src="anim-edit.js?v=0.9.187"></script>
-<script src="slot-groups.js?v=0.9.187"></script>
-<script src="event-names.js?v=0.9.187"></script>
-<script src="voice.js?v=0.9.187"></script>
-<script src="fixtures/cases.js?v=0.9.187"></script>
-<script src="app.js?v=0.9.187"></script>
+<script src="version.js?v=0.9.192"></script><script src="icons.js?v=0.9.192"></script>
+<script src="spine-core.js?v=0.9.192"></script>
+<script src="bundle.js?v=0.9.192"></script>
+<script src="bone-edit.js?v=0.9.192"></script>
+<script src="track-edit.js?v=0.9.192"></script>
+<script src="pose-tools.js?v=0.9.192"></script>
+<script src="ik-aim.js?v=0.9.192"></script>
+<script src="timeline.js?v=0.9.192"></script>
+<script src="frame-timeline.js?v=0.9.192"></script>
+<script src="pose-compare.js?v=0.9.192"></script>
+<script src="key-inspector.js?v=0.9.192"></script>
+<script src="curve-presets.js?v=0.9.192"></script>
+<script src="deform-edit.js?v=0.9.192"></script>
+<script src="anim-markers.js?v=0.9.192"></script>
+<script src="frame-thumbs.js?v=0.9.192"></script>
+<script src="audio-wave.js?v=0.9.192"></script>
+<script src="curve-edit.js?v=0.9.192"></script>
+<script src="batch-edit.js?v=0.9.192"></script>
+<script src="keymap.js?v=0.9.192"></script>
+<script src="anim-edit.js?v=0.9.192"></script>
+<script src="slot-groups.js?v=0.9.192"></script>
+<script src="event-names.js?v=0.9.192"></script>
+<script src="voice.js?v=0.9.192"></script>
+<script src="fixtures/cases.js?v=0.9.192"></script>
+<script src="app.js?v=0.9.192"></script>
 </body>
 </html>

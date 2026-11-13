@@ -314,6 +314,8 @@
         /* §14 P4：音频波形（纯显示）。包络在 audio-wave.js，解码在 app.js。 */
         showWave: false,
         waveDrawn: 0,
+        /* §3.3 帧选择工具：frameSelect（拖出帧范围）| frameBox（框选帧+轨道） */
+        frameTool: "frameSelect",
       },
     },
 
@@ -12111,6 +12113,99 @@ function frameThumbsState() {
   }
 
   /** 帧视图鼠标：按下 */
+/*
+ * 帧选择工具（规划书 §3.3）+ 帧段复制（§6.1）
+ *
+ * 两种指针模式（工具条上切换）：
+ *   frameSelect  帧选择：在帧格上拖动 = 画出帧范围（默认）
+ *   frameBox     框选：拖出矩形，同时选帧与轨道 Key（等价 Dopesheet 框选）
+ *
+ * 复制能力：
+ *   · Alt + 拖拽帧段 = 复制到新位置（原位置保留），对应 frame-timeline 的 duplicate 操作
+ *   · 「复制帧」按钮 = 把当前帧范围内的 Key 放进剪贴板（Ctrl+C 等价，但按范围）
+ *   · 「复制到后一帧」按钮 = 把范围整体复制到 +1 帧（不需要拖拽）
+ */
+
+/** 当前帧选择工具："frameSelect" | "frameBox" */
+function fsFrameTool() {
+  const t = state.edit.timeline.frameTool;
+  return t === "frameBox" ? "frameBox" : "frameSelect";
+}
+
+/** 切换帧选择工具（工具条按钮） */
+function fsSetFrameTool(tool, opts) {
+  const o = opts || {};
+  const next = tool === "frameBox" ? "frameBox" : "frameSelect";
+  state.edit.timeline.frameTool = next;
+  const a = el0("dsFrameToolSelect");
+  const b = el0("dsFrameToolBox");
+  if (a) a.setAttribute("aria-pressed", next === "frameSelect" ? "true" : "false");
+  if (b) b.setAttribute("aria-pressed", next === "frameBox" ? "true" : "false");
+  if (!o.silent) {
+    setStatus(next === "frameBox"
+      ? "框选工具：拖出矩形，同时选中范围内的帧与轨道 Key"
+      : "帧选择工具：在帧格上拖动画出帧范围");
+  }
+  return { tool: next };
+}
+
+/**
+ * 按当前帧范围复制 Key 进剪贴板。
+ * 与 fsCopyFrameRange 的区别：没有帧范围时退回「复制当前选中 Key」，不会静默什么都不做。
+ */
+function fsCopyRangeToClipboard() {
+  const r = fsRangeFrames();
+  const hasRange = r && Number.isFinite(r.start) && Number.isFinite(r.end);
+  if (!hasRange) {
+    /* 没有帧范围：退回选中 Key 的复制 */
+    const res = dsCopySelection();
+    return { ok: !!(res && res.ok), mode: "keys", status: (el0("statusMsg") || {}).textContent };
+  }
+  const res = fsCopyFrameRange();
+  return { ok: !!(res && res.ok), mode: "range", range: { start: r.start, end: r.end }, status: (el0("statusMsg") || {}).textContent };
+}
+
+/**
+ * 把当前帧范围整体复制到 +deltaFrames 处（原位置保留）。
+ * 这是「Alt+拖拽」与「复制到后一帧」按钮的共同底层。
+ */
+function fsDuplicateRange(deltaFrames) {
+  const r = fsRangeFrames();
+  if (!r || !Number.isFinite(r.start) || !Number.isFinite(r.end)) {
+    setStatus("先选中一段帧范围再复制", "warn");
+    return false;
+  }
+  const delta = Number.isFinite(deltaFrames) ? Math.round(deltaFrames) : 1;
+  if (delta === 0) {
+    setStatus("复制位移不能为 0", "warn");
+    return false;
+  }
+  const lib = frameTimelineLib();
+  if (!lib || typeof lib.applyTimeFrameOperation !== "function") {
+    setStatus("帧模块未加载", "warn");
+    return false;
+  }
+  const ok = animTimeFrameOp("duplicate", {
+    fromFrame: r.start,
+    count: Math.max(1, r.end - r.start + 1),
+    deltaFrames: delta,
+    collision: "skip",
+  });
+  if (ok) {
+    /* 复制完成后把范围移到新位置，方便连续操作 */
+    const a = r.start + delta;
+    const b = r.end + delta;
+    const list = [];
+    for (let f = a; f <= b; f++) list.push(f);
+    state.edit.timeline.frameSel = list;
+    state.edit.timeline.frameRange = { start: a, end: b };
+    setStatus("已复制帧范围 " + r.start + "–" + r.end + " 到 " + a + "–" + b + "（原位置保留）");
+    dsSyncBars();
+    dsDraw();
+  }
+  return ok;
+}
+
   function fsPointerDown(e, p, L) {
     const lib = frameTimelineLib();
     if (!lib) return false;
@@ -12133,9 +12228,28 @@ function frameThumbsState() {
     if (hit) return false;
     const frame = lib.snapFrame(fsXToFrame(p.x));
     const mode = e.shiftKey ? "range" : e.ctrlKey || e.metaKey ? "toggle" : "set";
+    /* **框选工具**：拖出矩形，同时选帧与轨道 Key（等价 Dopesheet 框选）。
+       这里不进入 fs-frame（那是「画帧范围」），而是走 Dopesheet 的 ds-box 流程。 */
+    if (fsFrameTool() === "frameBox") {
+      state.drag = {
+        mode: "ds-box",
+        pointerId: e.pointerId,
+        anchor: { x: p.x, y: p.y },
+        box: null,
+        moveMode: !(e.ctrlKey || e.metaKey),
+      };
+      try {
+        box.setPointerCapture(e.pointerId);
+      } catch (_) {
+        /* 忽略 */
+      }
+      if (!(e.ctrlKey || e.metaKey)) dsSelectKey(null);
+      return true;
+    }
     /* **拖拽帧段**：起手那一帧若已在既有帧范围内，记下整段边界，
        之后拖动就整体平移（Flash 的「拖拽帧」）。否则 spanStart/spanEnd 为 null，
-       拖动退化成重新框选（保持原有行为，不破坏既有交互）。 */
+       拖动退化成重新框选（保持原有行为，不破坏既有交互）。
+       **Alt 键 = 复制**（不移动原位置的 Key）。 */
     const cur = state.edit.timeline.frameRange;
     const inSpan = !!(cur && Number.isFinite(cur.start) && Number.isFinite(cur.end) &&
       frame >= cur.start && frame <= cur.end);
@@ -12149,6 +12263,8 @@ function frameThumbsState() {
       spanStart: inSpan ? cur.start : null,
       spanEnd: inSpan ? cur.end : null,
       lastDelta: 0,
+      /* Alt 拖拽 = 复制帧段（原位置保留），否则 = 平移 */
+      duplicate: !!e.altKey && inSpan,
     };
     fsSelectFrame(frame, mode);
     try {
@@ -12205,12 +12321,14 @@ function frameThumbsState() {
       const delta = to - d.anchorFrame;
       if (delta !== d.lastDelta) {
         d.lastDelta = delta;
-        /* 预览：把范围按 delta 平移后重画（不写数据） */
+        /* 预览：把范围按 delta 平移后重画（不写数据）。
+           Alt 复制时原范围不动，预览用「新位置」高亮，提示这是复制而非移动。 */
         const a = d.spanStart + delta;
         const b = d.spanEnd + delta;
         state.edit.timeline.frameSel = (function () { const l = []; for (let f = a; f <= b; f++) l.push(f); return l; })();
         state.edit.timeline.frameRange = { start: a, end: b };
-        setStatus("拖拽帧段：第 " + d.spanStart + "–" + d.spanEnd + " 帧 → " + a + "–" + b + "（松开应用，Esc 取消）");
+        setStatus((d.duplicate ? "复制帧段：" : "拖拽帧段：") + "第 " + d.spanStart + "–" + d.spanEnd +
+          " 帧 → " + a + "–" + b + (d.duplicate ? "（Alt：原位置保留）" : "（松开应用，Esc 取消）"));
         dsSyncBars();
         dsDraw();
       }
@@ -12241,17 +12359,18 @@ function frameThumbsState() {
       const delta = d.lastDelta;
       const s0 = d.spanStart;
       const s1 = d.spanEnd;
+      const isDup = !!d.duplicate;
       state.drag = null;
       /* **关键**：预览阶段已经把 frameRange 改成了「平移后」的位置，
-         而 frameShiftRange() 读的是当前 frameRange —— 直接调会二次平移。
-         所以先还原成原始范围，再执行一次真正的移动。 */
+         而 frameShiftRange() / fsDuplicateRange() 读的是当前 frameRange ——
+         直接调会二次平移。所以先还原成原始范围，再执行一次真正的操作。 */
       const orig = [];
       for (let f = s0; f <= s1; f++) orig.push(f);
       state.edit.timeline.frameSel = orig;
       state.edit.timeline.frameRange = { start: s0, end: s1 };
-      const ok = frameShiftRange(delta);
+      const ok = isDup ? fsDuplicateRange(delta) : frameShiftRange(delta);
       if (!ok) {
-        setStatus("拖拽帧段失败：范围未移动（文档未改动）", "warn");
+        setStatus((isDup ? "复制帧段失败" : "拖拽帧段失败") + "：文档未改动", "warn");
       }
       dsSyncBars();
       dsDraw();
@@ -18389,6 +18508,8 @@ function flashBlankFrame(opts) {
       );
       if (isGroup) {
         const ckey = row.collapseKey || "bone:" + row.owner;
+        /* 供框选按 rowKey 对齐行位置（见 dsPointerMove 的 ds-box 分支） */
+        line.setAttribute("data-row-key", "group:" + ckey);
         /* Flash 风格图层色块（0.9.110）：按轨道类型分色，与帧时间轴的图层条对应 */
         line.appendChild(el("span", "ds-swatch" + rowColorClass(row)));
         line.appendChild(el("span", "ds-caret", row.open ? "▾" : "▸"));
@@ -18403,6 +18524,8 @@ function flashBlankFrame(opts) {
           dsDraw();
         });
       } else {
+        /* 供框选按 rowKey 对齐行位置（见 dsPointerMove 的 ds-box 分支） */
+        line.setAttribute("data-row-key", timelineLib() ? timelineLib().rowKey(row) : "");
         const slotAtt = !extra && row.kind === "slot" && row.field === "attachment" ? slotAttachmentAt(row.owner, state.t) : null;
         const meta = extra
           ? extraLabelOf(row)
@@ -19557,17 +19680,60 @@ function flashBlankFrame(opts) {
       const L0 = dsLayout();
       const rows = dsView().rows;
       const picked = [];
+      /* **行 y 的权威来源是标签列真实 DOM 行，且必须按 rowKey 对齐，不能按索引**。
+         实测踩到的坑：dsView().rows 与 #dsLabels 里的 .ds-row 顺序/数量并不一致
+         （group 行、折叠、额外轨道都会错位），按索引取 band 会把 y 对到错误的行上，
+         结果「框选始终 0 个 Key」。
+         做法：先建 rowKey → DOM 行 rect 的映射，再按 row.rowKey 查。 */
+      const labelBox = el0("dsLabels");
+      const tracksBox = el0("dsTracks");
+      const boxRect = tracksBox ? tracksBox.getBoundingClientRect() : null;
+      const bandByKey = new Map();
+      if (labelBox && boxRect) {
+        const domRows = labelBox.querySelectorAll(".ds-row");
+        for (const n of domRows) {
+          const key = n.getAttribute("data-row-key") || n.dataset ? (n.getAttribute("data-row-key") || null) : null;
+          if (!key) continue;
+          const rr = n.getBoundingClientRect();
+          if (!rr || !(rr.height > 0)) continue;
+          bandByKey.set(key, { y0: rr.top - boxRect.top, y1: rr.bottom - boxRect.top });
+        }
+      }
+      const rowBandOf = (row, i) => {
+        const key = row && row.rowKey ? String(row.rowKey) : null;
+        if (key && bandByKey.has(key)) return bandByKey.get(key);
+        /* 退路：按公式（无 DOM 或没打 data-row-key 时） */
+        const cy = L0.rulerH - L0.scrollTop + i * L0.rowH;
+        return { y0: cy, y1: cy + L0.rowH };
+      };
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         if (!row || row.kind === "group" || row.filtered || row.hidden) continue;
-        const cy = L0.rulerH - L0.scrollTop + i * L0.rowH;
-        if (cy + L0.rowH < d.box.y0 || cy > d.box.y1) continue;
-        for (const key of row.keys || []) {
-          const x = L0.scrollSec !== undefined ? timelineLib().timeToX({ time: key.time, scrollSec: L0.scrollSec, pxPerSec: L0.pxPerSec }) : 0;
-          if (x >= d.box.x0 - 6 && x <= d.box.x1 + 6) picked.push({ kind: row.kind, owner: row.owner, field: row.field, time: key.time });
+        const band = rowBandOf(row, i);
+        if (band.y1 < d.box.y0 || band.y0 > d.box.y1) continue;
+        /* **必须用 keyTimes，不是 keys**：dsView().rows 的每行字段是
+           { rowKey, kind, owner, field, label, keyCount, keyTimes, unsupported }，
+           **没有 keys**。原来写 row.keys 会永远得到空数组。 */
+        const times = Array.isArray(row.keyTimes) ? row.keyTimes
+          : Array.isArray(row.keys) ? row.keys.map((k) => (k && typeof k === "object" ? k.time : k)) : [];
+        for (const t of times) {
+          if (!Number.isFinite(t)) continue;
+          const x = timelineLib().timeToX({ time: t, scrollSec: L0.scrollSec, pxPerSec: L0.pxPerSec });
+          if (x >= d.box.x0 - 6 && x <= d.box.x1 + 6) picked.push({ kind: row.kind, owner: row.owner, field: row.field, time: t });
         }
       }
       selectionSet(picked, picked[0] || null);
+      /* 诊断：把判定过程记下来，便于查「框到了却选不中」 */
+      state.edit.timeline.boxDebug = {
+        box: { x0: Math.round(d.box.x0), y0: Math.round(d.box.y0), x1: Math.round(d.box.x1), y1: Math.round(d.box.y1) },
+        rowCount: rows.length,
+        labelRows: labelRows ? labelRows.length : 0,
+        firstBand: rows.length ? rowBandOf(0) : null,
+        sampleBand6: rows.length > 6 ? rowBandOf(6) : null,
+        picked: picked.length,
+        sampleTimes: rows.length > 6 ? (rows[6].keyTimes || []).slice(0, 3) : null,
+        scrollSec: L0.scrollSec, pxPerSec: L0.pxPerSec,
+      };
       setStatus("框选：" + selectionStatusText());
       dsDraw();
       return;
@@ -19884,6 +20050,15 @@ function flashBlankFrame(opts) {
     if (fsFirst) fsFirst.addEventListener("click", () => fsSeekFrame("first"));
     const fsLast = el0("dsFrameLast");
     if (fsLast) fsLast.addEventListener("click", () => fsSeekFrame("last"));
+    /* §3.3 帧选择工具（帧选择 / 框选）+ §6.1 帧段复制 */
+    const fsToolSel = el0("dsFrameToolSelect");
+    if (fsToolSel) fsToolSel.addEventListener("click", () => fsSetFrameTool("frameSelect"));
+    const fsToolBox = el0("dsFrameToolBox");
+    if (fsToolBox) fsToolBox.addEventListener("click", () => fsSetFrameTool("frameBox"));
+    const fsCopyBtn = el0("dsFrameCopy");
+    if (fsCopyBtn) fsCopyBtn.addEventListener("click", () => fsCopyRangeToClipboard());
+    const fsDupBtn = el0("dsFrameDup");
+    if (fsDupBtn) fsDupBtn.addEventListener("click", () => fsDuplicateRange(1));
     const fsFps = el0("dsFps");
     if (fsFps) {
       const applyFps = () => {
@@ -22228,6 +22403,10 @@ function flashBlankFrame(opts) {
       flashBlankFrame: (opts) => flashBlankFrame(opts),
       /* F7 的意图探测（不写数据）：UI 用它决定直接执行还是弹二选一 */
       flashBlankIntent: () => flashBlankIntent(),
+      /* §3.3 帧选择工具 + §6.1 帧段复制 */
+      frameTool: (tool) => (tool === undefined ? { tool: fsFrameTool() } : fsSetFrameTool(tool)),
+      copyFrameRange: () => fsCopyRangeToClipboard(),
+      duplicateFrameRange: (delta) => fsDuplicateRange(delta),
       /* 诊断：F5/F6/F7 的帧匹配到底看到了什么（排查「有 Key 却说没有」用） */
       flashDebug: () => {
         const fps = tlFps();
