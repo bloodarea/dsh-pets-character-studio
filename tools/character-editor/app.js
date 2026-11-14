@@ -6209,9 +6209,9 @@ function renderAnimIdleList() {
     hd.type = "button";
     hd.setAttribute("aria-expanded", open ? "true" : "false");
     hd.appendChild(el("span", "anim-group-caret", open ? "▾" : "▸"));
-    hd.appendChild(el("span", "anim-group-name", "口型"));
+    hd.appendChild(el("span", "anim-group-name", "五官动画"));
     hd.appendChild(el("span", "anim-group-count", String(groups.talk.length)));
-    hd.title = open ? "收拢口型动画" : "展开口型动画（" + groups.talk.length + " 个）";
+    hd.title = open ? "收拢五官动画" : "展开五官动画（" + groups.talk.length + " 个）";
     hd.addEventListener("click", () => {
       state.animEdit.expandTalk = !open;
       renderAnimIdleList();
@@ -6873,27 +6873,70 @@ function lipSyncMerge(baseName, lip, opts) {
   };
 }
 
+/* 五官类槽：整眼 / 眼白 / 眼珠 / 睫毛 / 眉毛 / 嘴巴（含嘴巴特效） */
+const FACE_SLOT_RE = /^(整眼_[LR]|眼白_[LR]|眼珠_[LR]|睫毛_[LR]|眉毛_[LR]|嘴巴|嘴巴特效|鼻子)$/;
+
+/**
+ * 把视图框到**整张脸（五官）**。
+ * 早先按「16 倍嘴宽」取景，实测范围太小、只能看到嘴和一点点下巴，
+ * 看不出眉毛/眼睛的表情联动 —— 用户要求改为看到五官。
+ * 现在的做法：取所有五官槽的并集包围盒，居中并按画布比例缩放留边。
+ */
 function lipTestFocusFace() {
-  const mouthIdx = state.slots.findIndex((s) => s.name === "嘴巴");
-  if (mouthIdx < 0) return null;
   const f = state.frame || (typeof framePose === "function" ? framePose() : null);
   if (!f || !f.geo) return null;
-  const g = f.geo.find((x) => x.slotIndex === mouthIdx);
-  if (!g || !g.bounds) return null;
 
-  const b = g.bounds;
-  const cx = (b.minX + b.maxX) / 2;
-  const cy = (b.minY + b.maxY) / 2;
-  const mouthW = Math.max(4, b.maxX - b.minX);
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, hits = 0;
+  for (const g of f.geo) {
+    const slot = state.slots[g.slotIndex];
+    if (!slot || !FACE_SLOT_RE.test(slot.name)) continue;
+    if (!g.bounds) continue;
+    minX = Math.min(minX, g.bounds.minX);
+    maxX = Math.max(maxX, g.bounds.maxX);
+    minY = Math.min(minY, g.bounds.minY);
+    maxY = Math.max(maxY, g.bounds.maxY);
+    hits++;
+  }
 
-  /* 以嘴巴为中心取一块区域：宽度给 16 倍嘴宽（能带上整张脸与眉眼），
-     高度按画布比例换算，避免拉伸。倍数太小会只剩一张嘴，看不出表情。 */
-  const regionW = mouthW * 16;
-  const regionH = regionW * (viewH() / Math.max(1, viewW()));
-  const pad = 20;
+  /* 兜底：没有任何五官槽有几何时，退回嘴巴中心 + 一个嘴宽的方块 */
+  if (!hits || !isFinite(minX)) {
+    const mouthIdx = state.slots.findIndex((s) => s.name === "嘴巴");
+    const g = mouthIdx >= 0 ? f.geo.find((x) => x.slotIndex === mouthIdx) : null;
+    if (!g || !g.bounds) return null;
+    const b = g.bounds;
+    const mouthW = Math.max(4, b.maxX - b.minX);
+    minX = (b.minX + b.maxX) / 2 - mouthW * 2;
+    maxX = minX + mouthW * 4;
+    minY = (b.minY + b.maxY) / 2 - mouthW * 2;
+    maxY = minY + mouthW * 4;
+  }
+
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  /* 留边：左右/上下各让出一点，脸不会贴边 */
+  const marginRatio = 0.16;
+  const regionW = Math.max(8, (maxX - minX) * (1 + marginRatio * 2));
+  const regionH = Math.max(8, (maxY - minY) * (1 + marginRatio * 2));
+
+  const pad = 16;
   const availW = Math.max(40, viewW() - pad * 2);
   const availH = Math.max(40, viewH() - pad * 2);
   const z = clamp(Math.min(availW / regionW, availH / regionH), 0.02, 12);
+
+  /* 诊断钩子：records 取样自实际调用时的 frame/view，排查「取景范围不对」时用 */
+  if (typeof window !== "undefined") {
+    window.__lipFocusInfo = {
+      slots: hits,
+      union: [+minX.toFixed(1), +minY.toFixed(1), +maxX.toFixed(1), +maxY.toFixed(1)],
+      region: [+regionW.toFixed(1), +regionH.toFixed(1)],
+      view: [viewW(), viewH()],
+      avail: [+availW.toFixed(1), +availH.toFixed(1)],
+      zoom: +z.toFixed(4),
+      anim: state.anim,
+      t: +Number(state.t || 0).toFixed(3),
+      geoCount: f.geo.length,
+    };
+  }
 
   const old = { zoom: state.zoom, panX: state.panX, panY: state.panY };
   state.zoom = z;
@@ -7021,7 +7064,7 @@ function lipTestStop(opts) {
   if (t.savedAnim && !o.keep) {
     try { setAnim(t.savedAnim); } catch (_) { /* 忽略 */ }
   }
-  if (!o.silent) setStatus("口型测试已停止");
+  if (!o.silent) setStatus("五官测试已停止");
   return { ok: true, stopped: true };
 }
 
@@ -7043,7 +7086,7 @@ async function lipTestRun(opts) {
   });
   const source = gen && gen.source ? gen.source : "local-envelope";
   if (!gen.ok) {
-    setStatus("口型测试失败：" + gen.reason, "warn");
+    setStatus("五官测试失败：" + gen.reason, "warn");
     return gen;
   }
 
@@ -7078,7 +7121,7 @@ async function lipTestRun(opts) {
   /* 3) 音画同步播放 */
   const url = audioWaveUrlForLine(line);
   if (!url) {
-    setStatus("口型已生成，但找不到音频地址，无法同步播放", "warn");
+    setStatus("五官已生成，但找不到音频地址，无法同步播放", "warn");
     return Object.assign({}, gen, { ok: true, played: false, wrote: wrote });
   }
   const audio = new Audio(url);
@@ -7123,7 +7166,7 @@ async function lipTestRun(opts) {
         render();
         if (typeof fsSyncBar === "function") fsSyncBar();
         lipTestStop({ silent: true });
-        setStatus("口型测试播放完毕：" + gen.keys.length + " 个口型关键帧 · " +
+        setStatus("五官测试播放完毕：" + gen.keys.length + " 个口型关键帧 · " +
           round(gen.duration, 2) + "s（含尾巴渐显渐隐 " + round(totalDur - gen.duration, 2) + "s）");
         return;
       }
@@ -7149,11 +7192,11 @@ async function lipTestRun(opts) {
       const nowMono = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
       _lipTest.tailFrom = gen.duration;
       _lipTest.tailStartMono = nowMono;
-      setStatus("口型说完，尾巴：气渐显 → 停留 → 渐隐");
+      setStatus("五官说完，尾巴：气渐显 → 停留 → 渐隐");
       return;
     }
     lipTestStop({ silent: true });
-    setStatus("口型测试播放完毕：" + gen.keys.length + " 个口型关键帧 · " + round(gen.duration, 2) + "s");
+    setStatus("五官测试播放完毕：" + gen.keys.length + " 个口型关键帧 · " + round(gen.duration, 2) + "s");
   });
   audio.addEventListener("error", () => {
     if (!_lipTest) return;
@@ -7171,7 +7214,7 @@ async function lipTestRun(opts) {
   }
   _lipTest.raf = setInterval(drive, 40);
 
-  setStatus("口型测试中：「" + (line.text || line.id).slice(0, 18) + "」" +
+  setStatus("五官测试中：「" + (line.text || line.id).slice(0, 18) + "」" +
     merged.mouthKeys + " 个口型 · " + round(gen.duration, 2) + "s · 基础「" + baseName + "」" +
     (merged.hasEyeLayer ? "（含眼眉）" : "") + " · 说完保持 " + String(merged.mouthTail).replace("mouth_", "") +
     " · 数据源 " + (source === "pack-lipsync" ? "lipsync.json" : "本地包络") +
@@ -7289,14 +7332,14 @@ function lipSyncApplyToAnim(result) {
   setAnim(name);
   syncAnimPanel();
   renderAnimIdleList();
-  setStatus("已生成口型动画「" + animLabel(name) + "」：" + wrote + " 个关键帧 · " + round(result.duration, 2) + "s（内存草稿，未保存）");
+  setStatus("已生成五官动画「" + animLabel(name) + "」：" + wrote + " 个关键帧 · " + round(result.duration, 2) + "s（内存草稿，未保存）");
   return { ok: true, animName: name, wrote: wrote, duration: result.duration };
 }
 
 /** 一键：当前台词 → 生成口型动画（供按钮/句柄调用） */
 async function lipSyncGenerate(opts) {
   const r = await lipSyncFromCurrentLine(opts);
-  if (!r.ok) { setStatus("口型生成失败：" + r.reason, "warn"); return r; }
+  if (!r.ok) { setStatus("五官生成失败：" + r.reason, "warn"); return r; }
   const applied = lipSyncApplyToAnim(r);
   return Object.assign({}, r, { applied: applied });
 }
@@ -7380,7 +7423,7 @@ function renderAnimPage() {
         if (r.ok) {
           const issues = lipsyncValidate(r.data);
           if (el) {
-            el.textContent = "口型 " + r.data.lines.length + " 条 · " + (issues.length ? issues.length + " 项不合规" : "校验通过");
+            el.textContent = "五官 " + r.data.lines.length + " 条 · " + (issues.length ? issues.length + " 项不合规" : "校验通过");
             el.title = "lipsync.json：" + r.path + (issues.length ? "\n" + issues.map((i) => i.code + ": " + i.message).join("\n") : "\n契约校验通过");
             el.hidden = false;
           }
@@ -11322,7 +11365,7 @@ function renderAnimPage() {
       const issues = lipsyncValidate(ls.data);
       text.appendChild(el("span", "vsep-dot", " · "));
       const lip = el("span", "voice-count" + (issues.length ? " is-warn" : ""),
-        "口型 " + ls.data.lines.length + (issues.length ? " / " + issues.length + " 项不合规" : " ✓"));
+        "五官 " + ls.data.lines.length + (issues.length ? " / " + issues.length + " 项不合规" : " ✓"));
       lip.title = "lipsync.json：" + ls.path +
         (issues.length ? "\n" + issues.map((i) => i.code + ": " + i.message).join("\n") : "\n契约校验通过");
       text.appendChild(lip);
@@ -11557,12 +11600,12 @@ function renderAnimPage() {
     const lipPlaying = !!(_lipTest && _lipTest.lineId === line.id);
     const lipBtn = el("button", "voice-line-lip btn btn-sm" + (lipPlaying ? " on" : ""));
     lipBtn.type = "button";
-    lipBtn.textContent = lipPlaying ? "停止" : "口型";
+    lipBtn.textContent = lipPlaying ? "停止" : "五官";
     lipBtn.title = lipPlaying
-      ? "停止这条台词的口型测试"
-      : "口型测试：待机骨骼 + 事件表情 + 本条台词的口型 → 在主时间轴播放（听声音看嘴型）";
+      ? "停止这条台词的五官测试"
+      : "五官测试：待机骨骼 + 事件表情 + 本条台词的口型 → 在主时间轴播放（听声音看五官联动）";
     lipBtn.setAttribute("aria-pressed", lipPlaying ? "true" : "false");
-    lipBtn.setAttribute("aria-label", (lipPlaying ? "停止口型测试 " : "口型测试 ") + line.id);
+    lipBtn.setAttribute("aria-label", (lipPlaying ? "停止五官测试 " : "五官测试 ") + line.id);
     row.appendChild(lipBtn);
     return row;
   }
@@ -23709,6 +23752,9 @@ function flashBlankFrame(opts) {
       lipPreviewStatic: (opts) => lipPreviewStatic(opts),
       lipTestRun: (opts) => lipTestRun(opts),
       lipTestStop: (opts) => lipTestStop(opts),
+      /* 五官取景：把视图框到整张脸，返回改动前的视角（{zoom,panX,panY}）便于还原。
+         自动化/取证时用来定格看清五官，不必真的播放音频。 */
+      lipFocusFace: () => lipTestFocusFace(),
       /* 诊断：F5/F6/F7 的帧匹配到底看到了什么（排查「有 Key 却说没有」用） */
       flashDebug: () => {
         const fps = tlFps();
