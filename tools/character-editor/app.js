@@ -6635,11 +6635,6 @@ function eventExpressionOf(lineId) {
   return ev && ev.expression && typeof ev.expression === "object" ? ev.expression : null;
 }
 
-/** 事件是否把嘴巴显式声明为 null（区别于「未声明」） */
-function exprPartsDeclaresMouthNull(parts) {
-  return !!parts && Object.prototype.hasOwnProperty.call(parts, "嘴巴") && parts["嘴巴"] == null;
-}
-
 /**
  * 用事件表情合成：骨骼用 idle 平铺，槽用事件表情，嘴巴走口型 + 末尾回事件嘴型。
  * @param {object} exprParts 事件 expression（左眼、右眼、眉毛_左、眉毛_右、眨眼_左/右、嘴巴…）
@@ -6671,32 +6666,27 @@ function lipSyncMergeFromEvent(exprParts, lip) {
   const slots = typeof exprSlotsFromParts === "function" ? exprSlotsFromParts(exprParts || {}, {}) : {};
   let baseTracks = 0;
   let exprMouth = null;
+  let exprFx = null;
   for (const slotName of Object.keys(slots)) {
+    if (slotName === "嘴巴") { exprMouth = slots[slotName]; continue; }
+    if (slotName === "嘴巴特效") { exprFx = slots[slotName]; continue; }
     const val = slots[slotName];
-    if (slotName === "嘴巴") { exprMouth = val; continue; }
-    /* 嘴巴声明为 null 的事件：嘴巴特效（mouth_嘘_气）会把「张嘴」盖住 → 说话期间隐藏 */
-    if (slotName === "嘴巴特效" && exprPartsDeclaresMouthNull(exprParts)) {
-      anim.slots[slotName] = { attachment: [{ time: 0, name: null }, { time: dur, name: null }] };
-      baseTracks++;
-      continue;
-    }
-    if (val == null) {
-      /* null = 该槽不显示附件；仍然写轨道，保证与表情页表现一致 */
-      anim.slots[slotName] = { attachment: [{ time: 0, name: null }, { time: dur, name: null }] };
-      baseTracks++;
-      continue;
-    }
-    anim.slots[slotName] = { attachment: [{ time: 0, name: val }, { time: dur, name: val }] };
+    /* null = 该槽不显示附件；仍然写轨道，保证与表情页表现一致 */
+    anim.slots[slotName] = { attachment: [{ time: 0, name: val == null ? null : val }, { time: dur, name: val == null ? null : val }] };
     baseTracks++;
   }
-  /* **事件把嘴巴显式声明为 null 时**（long_idle / reconnected / task_timeout 这 3 个：
-     它们的表情是「嘴不显示 + 嘴巴特效 mouth_嘘_气」的呼气造型），
-     口型驱动嘴巴后，mouth_嘘_气 会叠在张开的嘴上 —— 用户反馈的「叠加的嘴巴」。
-     所以这两种情况都按事件的真实语义处理：
-       · 说话期间把 嘴巴特效 隐藏（呼气造型不属于说话状态）
-       · 末尾把嘴恢复成事件声明的 null（不是无表情），与事件一致 */
-  const declaredMouthNull = !!exprParts && Object.prototype.hasOwnProperty.call(exprParts, "嘴巴") && exprParts["嘴巴"] == null;
-  const tailMouth = declaredMouthNull ? null : (exprMouth == null ? "mouth_无表情" : exprMouth);
+  /* **嘴巴特效**（mouth_嘘_气 这类从嘴里出来的气）属于「静态嘘声造型」：
+     它和嘴巴槽在同一个位置，口型一开始驱动嘴巴，它就会叠在张开/闭合的嘴上
+     —— 就是用户反馈的「叠加的嘴巴」。
+     所以口型期间（[0,dur)）隐藏，末尾 t=dur 再恢复事件声明的特效；
+     那一刻嘴巴也已回到事件嘴型，两者重新配套。
+     注：编辑器不限制嘘/嘘_气的组合（表情页可任意配），这里只处理口型叠加。 */
+  if (exprFx != null) {
+    anim.slots["嘴巴特效"] = { attachment: [{ time: 0, name: null }, { time: dur, name: exprFx }] };
+    baseTracks++;
+  }
+  /* 末尾恢复事件声明的嘴型（保持原值，可能是 null = 该造型不显示嘴巴） */
+  const tailMouth = exprMouth == null ? null : exprMouth;
 
   /* 3) 嘴巴：口型关键帧 + 末尾回事件嘴型（契约 ⑤「结束后才恢复情绪嘴」） */
   const mouthKeys = lip.keys
