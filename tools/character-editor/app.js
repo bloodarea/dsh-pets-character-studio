@@ -4564,6 +4564,8 @@
     }
     const box = Object.assign(Object.create(null), state.expr.override);
     for (const n of slotNames) box[n] = attName;
+    /* 嘴型级联：换嘴型时同步附属子特效（嘘 → 嘘_气；其它嘴型 → 撤掉气） */
+    if (slotKey === "mouth") box["嘴巴特效"] = exprCascadeFx(attName);
     exprEnforceExclusivity(box, slotNames);
     state.expr.override = box;
     state.expr.set = null;
@@ -4662,7 +4664,9 @@
     /* 0.9.35：这里原先是**硬编码列表**，新增的 mouthFx 不在里面 →
        就算 model / rig-meta / catalog 全都改好了，表情页也不会渲染它。
        直接给只会让人以为「结构没生效」。 */
-    const out = ["mouth", "mouthFx", "wholeL", "wholeR", "blinkL"];
+    /* 嘴巴特效（mouthFx）不再是可单独选择的部位：
+       它由「嘴型级联」决定（嘘 → 嘘_气），这里不渲染它，避免出现半套造型。 */
+    const out = ["mouth", "wholeL", "wholeR", "blinkL"];
     const nativeBlinkR = meta.slots.blinkR && typeof meta.slots.blinkR === "object";
     if (nativeBlinkR) out.push("blinkR");
     else out.push("whiteR", "irisR", "lashR");
@@ -4909,6 +4913,28 @@
    * 眨眼组是对象 {iris, white, lash}，null 表示该槽不显示附件。
    * whole 模式（左眼/右眼非 null）时眨眼组必为 null —— 这里也强制保证。
    */
+  /* **嘴型级联**：某些嘴型自带附属子特效（嘴巴特效槽）。
+     目前只有「嘘」：**嘴巴=mouth_嘘 时自动带 mouth_嘘_气**（从嘴里呼出的气流）。
+     这样前端不需要单独选「表情特效」，选嘴型即联动；
+     也避免出现「有嘘没气」「有气没嘘」这种半套造型。
+     数据可覆盖：catalog.expressionParts.mouthFx.cascade = { "mouth_嘘": "mouth_嘘_气", ... } */
+  const EXPR_MOUTH_FX_FALLBACK = { "mouth_嘘": "mouth_嘘_气" };
+
+  function exprCascadeMap() {
+    const c = state.expr && state.expr.catalog;
+    const node = c && c.expressionParts ? c.expressionParts["mouthFx"] || c.expressionParts["嘴巴特效"] : null;
+    const m = node && node.cascade;
+    if (m && typeof m === "object" && !Array.isArray(m)) return m;
+    return EXPR_MOUTH_FX_FALLBACK;
+  }
+
+  /** 给定嘴型 → 应该联动的附属子特效（没有则 null） */
+  function exprCascadeFx(mouthName) {
+    if (mouthName == null) return null;
+    const map = exprCascadeMap();
+    return Object.prototype.hasOwnProperty.call(map, mouthName) ? map[mouthName] : null;
+  }
+
   function exprSlotsFromParts(parts, baseSnapshot) {
     const next = Object.assign({}, baseSnapshot || {});
     if (!parts) return next;
@@ -4918,8 +4944,11 @@
     next["眉毛_L"] = parts["眉毛_左"] == null ? null : parts["眉毛_左"];
     next["眉毛_R"] = parts["眉毛_右"] == null ? null : parts["眉毛_右"];
     next["嘴巴"] = parts["嘴巴"] == null ? null : parts["嘴巴"];
-    /* 0.9.35：第 8 部位 → 嘴巴特效槽（可选部位，缺省即 null） */
-    next["嘴巴特效"] = parts["嘴巴特效"] == null ? null : parts["嘴巴特效"];
+    /* 0.9.35：第 8 部位 → 嘴巴特效槽。
+       现在改为**级联**：嘴巴=mouth_嘘 时自动带 mouth_嘘_气；
+       显式声明了非空 嘴巴特效 时以显式为准（保留手工组合的余地）。 */
+    const cascadeFx = exprCascadeFx(next["嘴巴"]);
+    next["嘴巴特效"] = parts["嘴巴特效"] == null ? cascadeFx : parts["嘴巴特效"];
     for (const [key, side] of [["眨眼_左", "L"], ["眨眼_右", "R"]]) {
       const g = whole ? null : parts[key];
       const iris = g && typeof g === "object" ? g.iris : null;
@@ -4968,7 +4997,14 @@
     }
     for (const a of atts) {
       const pressed = groupApplied && current === a;
-      const btn = exprButton(a, "exp-att", pressed ? "当前生效：" + a : "点击试装（仅预览）");
+      /* 嘴型级联：能带出附属子特效的嘴型，在按钮上直接标出来（嘘 ＋嘘_气），
+         否则用户会以为「气」还需要另外选。 */
+      const casc = slotKey === "mouth" ? exprCascadeFx(a) : null;
+      const label = casc ? a + " ＋" + String(casc).replace(/^mouth_/, "") : a;
+      const title = pressed
+        ? "当前生效：" + a + (casc ? "（自动带 " + casc + "）" : "")
+        : (casc ? "点击试装（仅预览）· 自动联动 " + casc : "点击试装（仅预览）");
+      const btn = exprButton(label, "exp-att", title);
       btn.setAttribute("aria-pressed", pressed ? "true" : "false");
       btn.addEventListener("click", () => applyExprAttachment(slotKey, a));
       list.appendChild(btn);
