@@ -6708,6 +6708,20 @@ function lipSyncMergeFromEvent(exprParts, lip) {
       { time: a2, color: "ffffffff" },
       { time: total, color: "ffffff00" },
     ];
+    /* **气要向右飘走**（用户：原地太假）。嘴巴特效槽挂在新骨 mouth_fx（head 的子骨）上，
+       所以尾巴里给这根骨加 translate 轨道：从嘴边 0 开始，边渐显边右移，
+       渐隐结束时已飘出一段距离（~74 单位，嘴宽 27 的 2.7 倍）。 */
+    if (Array.isArray(raw.bones) && raw.bones.some((b) => b && b.name === "mouth_fx")) {
+      anim.bones["mouth_fx"] = {
+        translate: [
+          { time: 0, x: -9, y: 0 },
+          { time: dur, x: -9, y: 0 },
+          { time: Math.round((dur + 0.30) * 1e6) / 1e6, x: 15, y: 4 },
+          { time: Math.round((dur + 0.60) * 1e6) / 1e6, x: 43, y: 8 },
+          { time: total, x: 65, y: 12 },
+        ],
+      };
+    }
     baseTracks++;
   }
   /* 末尾恢复事件声明的嘴型（保持原值，可能是 null = 该造型不显示嘴巴） */

@@ -221,7 +221,10 @@
       var pB = C.evalPose(model, { animation: "idle", time: 0.5, skin: "default" });
       var real = P.comparePose({ poseA: pA, poseB: pB, names: names });
       eq("真实 rig 对照 ok", real.ok, true);
-      eq("骨数 43", real.total, 43);
+      /* 骨数不要硬编码：真实 rig 会随制作进展增减骨骼（例如 0.9.233 给「嘴巴特效」
+         加的 mouth_fx 子骨）。这里断言「对照结果覆盖了模型全部骨骼」，并要求规模合理。 */
+      eq("骨数 = 模型骨数", real.total, model.bones.length);
+      ok("骨数规模合理（>40）", model.bones.length > 40);
       ok("0s 与 0.5s 确有变化（>0 根骨）", real.changedCount > 0);
       ok("变化骨数少于总数（不是全动）", real.changedCount < real.total);
       ok("摘要可读且非空", P.summaryLine(real).length > 0);
