@@ -5463,7 +5463,6 @@
         "attachment.sequence.unsupported",
         "animation.transform.unsupported",
         "animation.deform.unsupported",
-        "animation.slotColor.unsupported"
       ],
       "poses": [
         {

@@ -1821,6 +1821,10 @@
     for (const item of frame.geo) {
       const page = state.pageImages[item.pageIndex] || state.pageImages[0];
       if (!page) continue;
+      /* 槽透明度（来自动画 slots.<slot>.color 轨道，用于附件渐显渐隐）。
+         完全透明就跳过，省一次绘制。 */
+      const slotA = frame.pose && frame.pose.slotAlpha ? frame.pose.slotAlpha[item.slotIndex] : 1;
+      if (slotA <= 0.002) continue;
       const screen = projXY(item.worldXY);
       /* 虹膜 item：走裁剪路径（画完再用 sclera 蒙版切） */
       if (gazeClips && gazeClips.irisSlots.has(item.slotIndex)) {
@@ -1831,14 +1835,16 @@
         }
       }
       if (!useScratch) {
+        if (slotA < 0.999) ctx.globalAlpha = alpha * slotA;
         paintItem(ctx, item, screen, page, dpr);
+        if (slotA < 0.999) ctx.globalAlpha = 1;
         continue;
       }
       const g = scratchContext();
       paintItem(g, item, screen, page, dpr);
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.globalAlpha = alpha;
+      ctx.globalAlpha = alpha * slotA;
       ctx.drawImage(scratch, 0, 0);
       ctx.restore();
     }
@@ -6676,13 +6682,32 @@ function lipSyncMergeFromEvent(exprParts, lip) {
     baseTracks++;
   }
   /* **嘴巴特效**（mouth_嘘_气 这类从嘴里出来的气）属于「静态嘘声造型」：
-     它和嘴巴槽在同一个位置，口型一开始驱动嘴巴，它就会叠在张开/闭合的嘴上
-     —— 就是用户反馈的「叠加的嘴巴」。
-     所以口型期间（[0,dur)）隐藏，末尾 t=dur 再恢复事件声明的特效；
-     那一刻嘴巴也已回到事件嘴型，两者重新配套。
+     它和嘴巴槽在同一个位置，口型一开始驱动嘴巴，它就会叠在张开/闭合的嘴上。
+     处理：口型期间隐藏，音频结束后进入**尾巴子动画**（用户要求）：
+       dur         起：气出现，透明度 0
+       dur+0.25s   ：渐显到 1
+       dur+0.55s   ：保持 1
+       dur+0.90s   ：渐隐回 0（动画结束）
+     透明度走标准 slots.<slot>.color 轨道（Spine 4.2），由 spine-core 求值、
+     绘制时乘进 globalAlpha —— 所以是真的渐显渐隐，不是跳变。
      注：编辑器不限制嘘/嘘_气的组合（表情页可任意配），这里只处理口型叠加。 */
+  const FX_TAIL = 0.9;
+  const total = Math.round((dur + (exprFx != null ? FX_TAIL : 0)) * 1e6) / 1e6;
+  anim.duration = total;
   if (exprFx != null) {
     anim.slots["嘴巴特效"] = { attachment: [{ time: 0, name: null }, { time: dur, name: exprFx }] };
+    const a1 = Math.round((dur + 0.25) * 1e6) / 1e6;
+    const a2 = Math.round((dur + 0.55) * 1e6) / 1e6;
+    /* **必须是 Spine 原生的 color 字符串格式**（rrggbbaa）：
+       写成 {time, alpha} 会被草稿/解析链路按「无 color 字段」处理，alpha 恒为 1
+       （实测：解析出来的 5 个键 alpha 全是 1，渐变失效）。 */
+    anim.slots["嘴巴特效"].color = [
+      { time: 0, color: "ffffff00" },
+      { time: dur, color: "ffffff00" },
+      { time: a1, color: "ffffffff" },
+      { time: a2, color: "ffffffff" },
+      { time: total, color: "ffffff00" },
+    ];
     baseTracks++;
   }
   /* 末尾恢复事件声明的嘴型（保持原值，可能是 null = 该造型不显示嘴巴） */
@@ -6705,7 +6730,9 @@ function lipSyncMergeFromEvent(exprParts, lip) {
     hasEyeLayer: baseTracks > 0,
     boneTracks: Object.keys(anim.bones).length,
     mouthKeys: anim.slots["嘴巴"].attachment.length,
-    duration: dur,
+    duration: dur,           /* 音频时长（口型部分） */
+    totalDuration: total,    /* 含尾巴子动画的总时长 */
+    fxTail: exprFx != null ? FX_TAIL : 0,
     fromEvent: true,
   };
 }
@@ -6890,6 +6917,7 @@ async function lipPreviewStatic(opts) {
   return {
     ok: true, static: true, animName: TEST_NAME,
     duration: merged.duration, mouthKeys: merged.mouthKeys, mouthTail: merged.mouthTail,
+    totalDuration: merged.totalDuration || merged.duration, fxTail: merged.fxTail || 0,
     hasEyeLayer: merged.hasEyeLayer, boneTracks: merged.boneTracks,
   };
 }
@@ -7068,8 +7096,26 @@ async function lipTestRun(opts) {
      实测 t 会卡在 0.1s 不动（看起来就是「点了没反应」）。40ms 足够跟手。 */
   const drive = () => {
     if (!_lipTest || _lipTest.audio !== audio) return;
-    const dur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : gen.duration;
-    const t = Math.min(dur, audio.currentTime || 0);
+    const audioDur = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : gen.duration;
+    const totalDur = merged.totalDuration || merged.duration || audioDur;
+    let t;
+    if (_lipTest.tailFrom != null) {
+      /* 尾巴阶段：音频已结束，按真实时间把播放头从音频末尾推到 totalDur */
+      const nowMono = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+      t = Math.min(totalDur, _lipTest.tailFrom + (nowMono - _lipTest.tailStartMono) / 1000);
+      if (t >= totalDur - 1e-4) {
+        state.t = totalDur;
+        updateTimeLabel();
+        render();
+        if (typeof fsSyncBar === "function") fsSyncBar();
+        lipTestStop({ silent: true });
+        setStatus("口型测试播放完毕：" + gen.keys.length + " 个口型关键帧 · " +
+          round(gen.duration, 2) + "s（含尾巴渐显渐隐 " + round(totalDur - gen.duration, 2) + "s）");
+        return;
+      }
+    } else {
+      t = Math.min(audioDur, audio.currentTime || 0);
+    }
     /* 直接改 state.t 并重绘（不走 setPlayhead，避免暂停音频） */
     state.t = t;
     state.playing = true;
@@ -7083,6 +7129,15 @@ async function lipTestRun(opts) {
 
   audio.addEventListener("ended", () => {
     if (!_lipTest) return;
+    const totalDur = merged.totalDuration || merged.duration || gen.duration;
+    if (totalDur > gen.duration + 1e-3) {
+      /* 尾巴子动画：不立即停，交给 drive() 推完 */
+      const nowMono = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+      _lipTest.tailFrom = gen.duration;
+      _lipTest.tailStartMono = nowMono;
+      setStatus("口型说完，尾巴：气渐显 → 停留 → 渐隐");
+      return;
+    }
     lipTestStop({ silent: true });
     setStatus("口型测试播放完毕：" + gen.keys.length + " 个口型关键帧 · " + round(gen.duration, 2) + "s");
   });

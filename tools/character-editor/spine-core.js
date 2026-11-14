@@ -1608,8 +1608,28 @@
             slotTracks.attachment = { keys: keys, default: model.slots[slotIdx].setupAttachment };
             anim.duration = Math.max(anim.duration, maxKeyTime(keys));
           } else if (slotField === "color" || slotField === "rgba") {
-            warn(ctx, "animation.slotColor.unsupported", spath + "." + slotField, "槽位颜色动画未求值（部分预览）");
-            anim.hasSlotColor = true;
+            /* **槽位颜色/透明度轨道（Spine 4.2 标准）**：
+               slots.<slot>.color = [{ time, color: "rrggbbaa" }] 或 [{ time, r,g,b,a }]
+               本期只求值 alpha（attachment 的渐显渐隐靠它），RGB 乘算暂不参与预览。 */
+            var cRaw = slotBag[slotField];
+            if (!Array.isArray(cRaw)) hard(ctx, "animation.keys", spath + "." + slotField, "slot color timeline 必须是数组");
+            var cKeys = new Array(cRaw.length);
+            for (var ck = 0; ck < cRaw.length; ck++) {
+              var ckr = cRaw[ck];
+              if (!isObject(ckr)) hard(ctx, "animation.key", spath + "." + slotField + "[" + ck + "]", "key 必须是对象");
+              var ct = f32(readNum(ctx, ckr, "time", 0, spath + "." + slotField + "[" + ck + "]"));
+              var aVal = 1;
+              if (typeof ckr.color === "string") {
+                var hex = ckr.color.trim().replace(/^#/, "");
+                if (hex.length === 8) aVal = parseInt(hex.slice(6, 8), 16) / 255;
+              } else if (isFiniteNumber(ckr.a)) {
+                aVal = ckr.a;
+              }
+              if (!isFiniteNumber(aVal)) aVal = 1;
+              cKeys[ck] = { time: ct, alpha: Math.max(0, Math.min(1, aVal)) };
+            }
+            cKeys.sort(function (x, y) { return x.time - y.time; });
+            slotTracks.color = { keys: cKeys };
           } else {
             warn(ctx, "animation.slotField.unknown", spath + "." + slotField, "未知 slot timeline 字段，已忽略");
           }
@@ -2045,6 +2065,24 @@
     return chosen.slice();
   }
 
+/** 采样槽透明度（线性插值；无键返回 1） */
+function sampleSlotAlpha(keys, time) {
+  if (!keys || !keys.length) return 1;
+  if (time <= keys[0].time) return keys[0].alpha;
+  var last = keys[keys.length - 1];
+  if (time >= last.time) return last.alpha;
+  for (var i = 1; i < keys.length; i++) {
+    var b = keys[i];
+    if (time > b.time) continue;
+    var a = keys[i - 1];
+    var span = b.time - a.time;
+    if (!(span > 0)) return b.alpha;
+    var t = (time - a.time) / span;
+    return a.alpha + (b.alpha - a.alpha) * t;
+  }
+  return last.alpha;
+}
+
   function evalPose(model, opts) {
     var options = opts || {};
     if (model && model.ok === true && model.value) model = model.value;
@@ -2099,6 +2137,9 @@
     for (i = 0; i < model.slots.length; i++) {
       attachments[i] = resolveAttachment(model, skin, i, model.slots[i].setupAttachment);
     }
+    /* 槽透明度：默认全 1，被 color 轨道覆盖（用于附件渐显渐隐） */
+    var slotAlpha = new Float32Array(model.slots.length);
+    slotAlpha.fill(1);
 
     if (anim) {
       applyBoneTracks(model, local, anim, time);
@@ -2109,6 +2150,9 @@
         if (slotTracks.attachment) {
           var name = sampleAttachmentName(slotTracks.attachment.keys, time, slotTracks.attachment.default);
           attachments[slotIndex] = resolveAttachment(model, skin, slotIndex, name);
+        }
+        if (slotTracks.color) {
+          slotAlpha[slotIndex] = sampleSlotAlpha(slotTracks.color.keys, time);
         }
       }
     }
@@ -2240,7 +2284,7 @@
       if (result.issues.length) issues.push.apply(issues, result.issues);
     }
 
-    return { local: local, applied: applied, world: world, attachments: attachments, drawOrder: drawOrder, deform: deform, issues: issues };
+    return { local: local, applied: applied, world: world, attachments: attachments, drawOrder: drawOrder, slotAlpha: slotAlpha, deform: deform, issues: issues };
   }
 
   /* ------------------------------------------------------------------ *
