@@ -2,6 +2,30 @@
 
 只记**编辑器自身**的里程碑版本（`version.js`）。人物包 JSON 的 `schemaVersion`（v3.2 为 `manifestSchemaVersion: 2`）与保存接口的 `apiVersion` 本轮都保持 **1**，不随编辑器版本变化 —— 编辑器版本 ↔ 人物包格式是两套版本轴。
 
+## 0.9.238 — 序列帧列表认规范 catalog 形态（三视图→序列帧流水线接线）
+
+**背景**：`workspace/three-view-to-seq-anime/step1` 要把图生视频序列帧接进人物包
+`sequences/`，验收第一步是动画分页「序列帧 · 复杂动作」能列出动作。真实包
+catalog 的规范形态（pack-format v3 §5b）是：
+
+```json
+"registries": { "sequence": { "owner": "sequences/index.json", "ids": ["tail_wag", "wave"] } }
+```
+
+| 缺陷 | 表现 | 根因 |
+| --- | --- | --- |
+| `animSequenceEntries` 对 object 形态逐 key 展开 | 序列区渲染出 `owner`、`ids` 两条假条目，真实动作 ID 一个都看不到 | 只写了数组分支与「对象=旧形态 {id: {…}}」分支，没考虑规范要求的 `{owner, ids}` 包装 |
+
+| 修复 | 说明 |
+| --- | --- |
+| `ids` 数组包装优先 | object 且含 `ids` 数组 → 取 `ids` 再走原数组分支；规范形态直接可用 |
+| 旧形态不回归 | 无 `ids` 键的 object 仍逐 key 展开（自建 fixtures 兼容） |
+
+**0.9.238 验证**：`node tools/character-editor/selftest-node.mjs` → **4383/4383**；
+规范形态复现 `["tail_wag","wave"]`、旧形态 `{wave:{…}}` 仍渲染 `["wave","nod"]`。
+端到端干跑（临时拷包，用完即删）：`wire_sequence.py` planned→ready 接线 + catalog
+generation 内容寻址递增 + Q2/Q5/Q6/Q8/C1/C2/C9/C11/C16 校验通过，幂等重跑逐字节一致。
+
 ## 0.9.118–0.9.144 — 规划书 P0：Frame Timeline 帧视图（Flash 式逐帧）
 
 ### 0.9.144：P3 收口 —— Events 参数编辑（修掉「文本字段被当数字」的静默丢弃）

@@ -6367,7 +6367,12 @@ function animSequenceEntries() {
   if (!cat) return out;
   /* 兼容几种可能的结构，任一层存在就用它 */
   const reg = cat.registries || cat;
-  const seq = reg && (reg.sequence || reg.sequences);
+  let seq = reg && (reg.sequence || reg.sequences);
+  /* 规范形态（pack-format v3 §5b）：{owner, ids: [...]} —— 取 ids 数组，不逐 key 展开
+   * （逐 key 展开会把 owner/ids 渲染成假条目） */
+  if (seq && typeof seq === "object" && !Array.isArray(seq) && Array.isArray(seq.ids)) {
+    seq = seq.ids;
+  }
   const push = (id, v) => {
     if (!id) return;
     const o = v && typeof v === "object" ? v : {};
