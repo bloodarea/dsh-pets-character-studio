@@ -91,7 +91,7 @@ human() { awk -v b="$1" 'BEGIN{printf (b>=1048576? "%.1f MiB" : "%.0f KiB"), (b>
 
 for f in "${files[@]}"; do
   case "$f" in
-    # --- 规则 1：本地参考 / 实验目录（仅仓库根；skills/*/references/ 属于随包资源）---
+    # --- 规则 1：本地参考 / 实验目录（仅仓库根；技能在 .agents/，见规则 1c）---
     references/*|reference/*|experiments/*|playground/*|sandbox/*)
       block "$f" "本地参考项目与实验目录不入库（体积大、第三方代码、许可证风险）"; continue ;;
     # --- 规则 1b：本地工作区（素材制作输入 / 模型与运行环境）---

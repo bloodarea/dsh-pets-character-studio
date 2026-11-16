@@ -4,7 +4,7 @@
 
 ## 入库内容
 
-- 公开技能及其配套参考资源（`skills/`）、仓库自检脚本（`scripts/*.sh`）、依赖声明、根 README/协作说明。
+- 仓库自检脚本（`scripts/*.sh`）、依赖声明、根 README/协作说明与制作工具源码（`tools/`）。
 - `assets/characters/`：**发布区**。每个人物包一个目录，必须带 `manifest.json`、`LICENSE`、`ATTRIBUTION.md` 与可用资源；`index.json` 是供 DSH Pets 下载的索引。不完整的包不得入库。
 - 轻量素材与清单可以入库；大体积帧序列优先走发布制品并在索引登记。
 
@@ -12,7 +12,7 @@
 
 - `workspace/`：**生产区**，放人物贴图与设定图（`texture2d-pack/`）、三视图（`three-view-pack/`）、预录语音输入（`voice-pack/`）、模型权重与中间产物；体积大、可重建，不入库。
 - `references/`：本地参考项目（`ref-anime/` 桌宠参考实现、`ref-texture2d/` 角色图集参考、`psd-tools/` 上游克隆），不入库。
-- `.agents/`、`.dsh/` 与本机参数不入库。公开技能通过本仓 `index.js` 注册；只读取本包 `skills/` 的直接子目录或扁平技能文件，资源以技能目录为根。插件提供者名为 `dsh-pets-character-studio`。
+- `.agents/`、`.dsh/` 与本机参数不入库。**本仓不是插件**：不再有 `index.js` / `cordis.patch.yml` / `locale/` / `icon.png`。项目级技能放 `.agents/skills/<name>/`（DSH 自动发现 `<projectRoot>/.agents/skills`），资源以技能目录为根，不要放本机路径与凭据。
 - `output/`（工作记录、回图、验收证据）、依赖、`.venv/`、字节码、构建目录、日志、临时文件、编辑器文件与凭据不入库。
 - `docs/` 下文档不入库；唯一例外为 `docs/assets/` 下的扁平图片（单张不超过 3 MiB）。
 - 单文件一般不超过 5 MiB；人物包资源单文件不超过 8 MiB。超限资源放 Release 或在索引登记外部地址。
@@ -21,7 +21,7 @@
 
 代码 MIT；角色图片、动画、音频与第三方素材分别遵守各自许可，不因代码开源自动获得授权。发布前逐项核实素材来源与再分发条件，并在包内保留署名。
 
-当前随包技能有 `skills/psd-tools/`（PSD/PSB 拆件，运行时依赖 PyPI 的 `psd-tools`）与 `skills/character-editor/`（内置人物包管理器的 agent 自动化接口契约，不引入新依赖）；生图与补全由项目级技能（如 `meta-api-imagegen`、`newapi-multimodal`）负责，结果仍按可见区逐像素验收。新增随包技能时按 `index.js` 的约定放 `skills/<name>/SKILL.md`（或扁平 `skills/<name>.md`），资源以技能目录为根，不要放入本机路径与凭据。
+本机项目级技能（`.agents/skills/`，不入库）当前有三个：`psd-tools`（PSD/PSB 拆件，运行时依赖 PyPI 的 `psd-tools`）、`character-editor`（内置人物包管理器的 agent 自动化接口契约，不引入新依赖）、`game-asset-video-sprites`（动作视频 → 帧序列精灵：色键去背、去溢色、BOX 缩小像素化、全局锁色、拼表与预览 GIF；脚本依赖 numpy/Pillow/OpenCV，ComfyUI 路径由 `COMFYUI_DIR` 指定）。生图与补全由全局技能（如 `meta-api-imagegen`、`newapi-multimodal`）负责，结果仍按可见区逐像素验收。新增技能时放 `.agents/skills/<name>/SKILL.md`，资源以技能目录为根。
 
 ## 自检
 

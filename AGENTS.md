@@ -4,9 +4,10 @@
 
 - `assets/characters/` 是**发布区**：只放完整人物包（manifest、资源、许可与署名齐备）与下载索引 `index.json`；不完整的包留在 `workspace/`。
 - `workspace/` 是**生产区**（本地、不入库）：`texture2d-pack/` 人物贴图与设定图、`three-view-pack/` 三视图、`voice-pack/` 语音输入、模型与中间产物。
-- 根目录 `references/`、`workspace/`、`experiments/`、`playground/`、`sandbox/` 与 `output/` 只在本地保留。技能自身的 `skills/*/references/` 是公开资源，可入库。
+- 根目录 `references/`、`workspace/`、`experiments/`、`playground/`、`sandbox/`、`output/` 与 `.agents/` 只在本地保留。
 - 依赖、构建产物、凭据和本机环境不入库；可重建产物不要新增为共享源码。
 - 提交前跑 `scripts/verify-hygiene.sh --all`。修改忽略规则时同步修改卫生脚本；不得用 `git add -f` 绕过。
-- 公开技能保持环境无关；本机网关、模型、路径留在忽略的 `.agents/skills/`。随插件分发的技能从 `skills/` 注册，当前有 `skills/psd-tools/`（PSD/PSB 拆件）与 `skills/character-editor/`（内置人物包管理器的 agent 自动化接口契约）。
+- **本仓不是 DSH 插件**：它只做人物包制作与分发，不注册任何插件、不提供桌宠运行时。
+- 项目级技能放 `.agents/skills/<name>/SKILL.md`（DSH 在 `<projectRoot>/.agents/skills` 自动发现，`.agents/` 不入库）。当前有三个：`psd-tools`（PSD/PSB 拆件）、`character-editor`（内置人物包管理器的 agent 自动化接口契约）、`game-asset-video-sprites`（动作视频 → 帧序列精灵：色键去背、去溢色、像素化、全局锁色、拼表）。
 - **本仓库是许可证分发与继承点**：代码 MIT（继承 dsh-pets，部分派生自 dsh-pet 的 MIT 许可），角色资产 CC BY-NC-SA 4.0。保留迁入素材的许可与署名；未经核实的制作输入不得自动成为可发布人物包。
 - `tools/character-editor/` 是现役**内置人物包管理器**（零依赖的 Spine 4.2 runtime JSON 查看/编辑工具），不是待迁移的旧工具；发布区规则（`assets/characters/` 只收完整包）不变。

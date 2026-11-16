@@ -94,8 +94,7 @@
 
 | 目录 / 文件 | 当前用途或状态 |
 | --- | --- |
-| `.agents/skills/`（本地忽略） | 项目级本机技能与 API 网关配置，例如 `meta-api-imagegen`、`newapi-multimodal`；凭据不得入库 |
-| `skills/psd-tools/` | 随插件分发的公开技能：用 psd-tools 把 PSD/PSB 拆成带 Alpha 的 PNG 部件（`scripts/psd_parts.py` + `references/`） |
+| `.agents/skills/`（本地忽略） | **项目级技能**（DSH 自动发现）：`psd-tools`（PSD/PSB 拆件）、`character-editor`（人物包管理器接口契约）、`game-asset-video-sprites`（动作视频 → 帧序列精灵）；凭据不得入库 |
 | `scripts/verify-hygiene.sh`、`scripts/install-hooks.sh` | 提交卫生检查与本地钩子 |
 | `assets/characters/` | **发布区**：完整人物包（`<id>/`，含清单、资源、许可与署名）与下载索引 `index.json`；DSH Pets 从远端仓库下载 |
 | `workspace/texture2d-pack/`、`workspace/three-view-pack/`、`workspace/voice-pack/` | **生产区**（本地、不入库）：人物贴图/设定图、三视图与预录语音的制作输入 |
@@ -107,17 +106,17 @@
 
 Spine 4.2 轻量骨架负责待机、眨眼与表情，内置人物包管理器（`tools/character-editor/`）直接载入 runtime JSON 查看与编辑骨骼、关键帧；**帧序列动画 + 预录语音**负责挥手、坐下、转身等复杂动作。两套共用同一角色、锚点与比例，切换用交叉淡入淡出（crossfade）。编辑器只处理运行时 JSON：不做 `.spine` 工程往返，也不导出二进制 `.skel`。
 
-### 在 DSH 中加载 Character Studio
+### 在 DSH 中使用（本仓不是插件）
+
+本仓只做人物包制作与分发，**不注册插件、不提供桌宠运行时**（运行端是独立的 dsh-pets）。
+在仓库根打开 DSH 会话即可：项目级技能从 `.agents/skills/<name>/SKILL.md` 自动发现，无需安装步骤。
 
 ```bash
-dsh plugin --profile <profile> add /path/to/dsh-pets-character-studio
-# 重载插件或重启 DSH 后生效
-
-# 卸载
-dsh plugin --profile <profile> remove dsh-pets-character-studio
+# 直接用到的本地工具
+python tools/character-editor/serve.py --port 8123 --no-browser   # 内置人物包管理器
+node tools/character-editor/selftest-node.mjs                     # 编辑器自测
+bash scripts/verify-hygiene.sh --all                              # 提交卫生检查
 ```
-
-插件名与技能 provider 均为 `dsh-pets-character-studio`，由 `index.js` 注册 `skills/` 下的公开技能；当前随包技能为 `psd-tools`（PSD/PSB 拆件），依赖见 `requirements.txt`。`.agents/skills/` 仅用于本地配置，不属于公开分发内容。
 
 ### 提交卫生检查
 
